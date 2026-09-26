@@ -4,7 +4,7 @@
 > across rendering fidelity, editor/tooling, physics/animation, and scripting/gameplay.
 >
 > **Status:** Foundation phase (multi-session project). **Author:** Engine architect (orchestrator).
-> **Doc version:** 1.4 (ADR-0004 applied). Update this header on every material revision.
+> **Doc version:** 1.5 (ADR-0005 applied). Update this header on every material revision.
 
 ---
 
@@ -535,6 +535,7 @@ until it builds and its acceptance check passes.
 - **v1.2** — ADR-0002: Opus 5.5 orchestration, isolated per-agent build trees, expanded frozen contracts, UNORM swapchain.
 - **v1.3** — ADR-0003: gameplay becomes the engine assembly layer (4b); `Application` contract frozen for Wave B.
 - **v1.4** — ADR-0004: Wave A closed (scripting, animation tests), gameplay implemented, M1 vertical slice, Linux/llvmpipe headless verification path.
+- **v1.5** — ADR-0005: the editor (Wave B complete).
 
 ---
 
@@ -721,3 +722,37 @@ with tests enabled failed to configure). `gameplay` was headers plus one-line st
 **Next (Wave B remainder):** `editor/` (ImGui docking editor: viewport via `set_render_extent` +
 `on_render_frame` override, hierarchy, inspector, gizmos, play-in-editor via `reload_world`), the
 `runtime/` player, golden-image tests using the headless path, and a real-GPU shadow check.
+
+---
+
+## ADR-0005 — The editor (2026-09-26)
+
+**Shape.** `editor/` builds `aether.editor` (a static library holding `EditorApp` plus the GPU-free
+pieces that are unit-tested: `EditHistory`, picking, the log console) and the `aether-editor`
+executable. `EditorApp` derives from `gameplay::Application` and overrides `on_render_frame` to render
+the world into an offscreen RGBA8 viewport texture (`RenderTarget` final state `ShaderRead`) that a
+docked ImGui window displays; `set_render_extent` keeps the renderer at the panel size. Viewport
+targets are retired `frames_in_flight + 1` frames after a resize before their ImGui descriptor and
+texture are freed.
+
+**Decisions**
+1. **Undo = whole-scene snapshots** (`scene::save_scene_to_string`). Exact for every component that
+   serializes (module codecs included) and trivially correct for hierarchy / add / remove; cheap at
+   editor scene sizes. Selection is kept by uuid because undo reloads the world. Drags and text fields
+   collapse into one step (continuous edits); toggles and combos are discrete steps.
+2. **Play-in-editor** = snapshot -> `set_simulation_enabled(true)`; Stop = `reload_world` from the
+   snapshot (ADR-0003 contract). Edit mode keeps the simulation disabled, so physics bodies and script
+   instances only exist while playing; edits made during play are not recorded and vanish on Stop.
+3. **Picking is CPU ray vs world AABB** (mesh bounds from the render cache) — no GPU id buffer yet.
+4. **ImGuizmo** (MIT, pinned commit in `cmake/deps/editor.cmake`) for translate/rotate/scale gizmos; it
+   is fed an OpenGL-style (Y-up NDC) projection, separate from the engine's Vulkan projection.
+5. **Built-in materials** (`gameplay::BuiltinMaterial`) join the built-in meshes, so scenes authored in
+   the editor render without asset files; **RenderBridgeSubsystem registers a procedural sky** as the
+   default environment (skybox + IBL) unless an app sets its own.
+6. `aether-editor --self-test` drives a full workflow (create, edit, undo/redo, duplicate/delete,
+   physics, reparent, pick, play/stop, save/open, model instancing, scripts) with the UI live; it passes
+   headless on llvmpipe with Vulkan validation clean. `content/scenes/showcase.aescene` is a sample scene.
+
+**Not done yet:** GPU id-buffer picking and multi-select, prefab assets, a material editor, asset
+thumbnails, drag-from-asset-browser into the viewport, an animation graph editor, the `runtime/`
+player, and golden-image tests.

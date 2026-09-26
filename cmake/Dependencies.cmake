@@ -10,6 +10,7 @@
 #   Vulkan::Headers  volk  aether_vma  glfw  glm::glm  imgui  EnTT::EnTT  doctest::doctest
 #   glslang::glslang glslang::glslang-default-resource-limits (via aether_glslang)
 #   Jolt  aether_lua  aether_sol2  aether_cgltf  aether_stb  nlohmann_json::nlohmann_json
+#   aether_imguizmo (editor only)
 include(FetchContent)
 
 set(FETCHCONTENT_QUIET OFF)
@@ -94,6 +95,9 @@ if(AE_WITH_PHYSICS)
 endif()
 if(AE_WITH_SCRIPTING)
     include(deps/scripting)
+endif()
+if(AE_WITH_EDITOR)
+    include(deps/editor)
 endif()
 
 # Group fetched targets in IDEs.

@@ -20,7 +20,7 @@ integration; work that violates them is sent back.
 | animation agent | `engine/animation/**` |
 | scripting agent | `engine/scripting/**`, `cmake/deps/scripting.cmake`, `content/scripts/**` |
 | gameplay agent | `engine/gameplay/**` (except the frozen `application.h`), `samples/vertical_slice/**` |
-| editor agent | `editor/**` |
+| editor agent | `editor/**`, `cmake/deps/editor.cmake` |
 | validation agent | `scripts/provision_validation.ps1`, `C:/Users/paulc/.aether/tools/vvl/**` |
 
 Never edit another owner's files. If you need something from another module, code against

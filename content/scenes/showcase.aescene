@@ -1,0 +1,1900 @@
+{
+  "format": "aether.scene",
+  "version": 1,
+  "kind": "scene",
+  "entities": [
+    {
+      "uuid": "ec1dcede6f299c75",
+      "components": {
+        "Name": {
+          "name": "Camera"
+        },
+        "Transform": {
+          "position": [
+            0.0,
+            5.0,
+            14.0
+          ],
+          "rotation": [
+            -0.15643448,
+            0.0,
+            0.0,
+            0.98768836
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        "Visibility": {
+          "visible": true
+        },
+        "Camera": {
+          "fov_y_deg": 60.0,
+          "near_z": 0.1,
+          "far_z": 500.0,
+          "primary": true
+        },
+        "FlyCamera": {
+          "boost_multiplier": 4.0,
+          "look_sensitivity": 0.15000000596046448,
+          "max_speed": 500.0,
+          "min_speed": 0.10000000149011612,
+          "move_speed": 5.0,
+          "require_look_button": true,
+          "speed_scroll_factor": 1.2000000476837158
+        }
+      }
+    },
+    {
+      "uuid": "7581d68a07f7650c",
+      "components": {
+        "Name": {
+          "name": "Sun"
+        },
+        "Transform": {
+          "position": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "rotation": [
+            -0.40305826,
+            0.27253202,
+            0.12708378,
+            0.86436117
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        "Visibility": {
+          "visible": true
+        },
+        "Light": {
+          "kind": "Directional",
+          "color": [
+            1.0,
+            0.96,
+            0.9
+          ],
+          "intensity": 3.0,
+          "range": 10.0,
+          "inner_cone_deg": 30.0,
+          "outer_cone_deg": 35.0,
+          "cast_shadows": true
+        }
+      }
+    },
+    {
+      "uuid": "bf0a05e62c476938",
+      "components": {
+        "Name": {
+          "name": "Lamp"
+        },
+        "Transform": {
+          "position": [
+            -3.0,
+            2.5,
+            3.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        "Visibility": {
+          "visible": true
+        },
+        "Light": {
+          "kind": "Point",
+          "color": [
+            1.0,
+            0.55,
+            0.25
+          ],
+          "intensity": 20.0,
+          "range": 12.0,
+          "inner_cone_deg": 30.0,
+          "outer_cone_deg": 35.0,
+          "cast_shadows": false
+        }
+      }
+    },
+    {
+      "uuid": "1b4c1c4b9396aa2e",
+      "components": {
+        "Name": {
+          "name": "Floor"
+        },
+        "Transform": {
+          "position": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "scale": [
+            2.0,
+            1.0,
+            2.0
+          ]
+        },
+        "Visibility": {
+          "visible": true
+        },
+        "MeshRenderer": {
+          "mesh": "33b10daa37b0966582d2f15a68c204b8",
+          "material": "a8cde4b41ccdf9dbeb87741926c71b15",
+          "cast_shadows": true,
+          "local_bounds": {
+            "min": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "max": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          }
+        },
+        "Collider": {
+          "half_extents": [
+            5.0,
+            0.10000000149011612,
+            5.0
+          ],
+          "local_offset": [
+            0.0,
+            -0.10000000149011612,
+            0.0
+          ],
+          "local_rotation": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "shape": "box"
+        }
+      }
+    },
+    {
+      "uuid": "831a67d14522daae",
+      "components": {
+        "Name": {
+          "name": "Box 0"
+        },
+        "Transform": {
+          "position": [
+            -1.6,
+            2.5,
+            -2.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        "Visibility": {
+          "visible": true
+        },
+        "MeshRenderer": {
+          "mesh": "1404bb577a277ca8ad27f10d368c71c3",
+          "material": "a3dda6cfaa172e2ae744affcda30bbbb",
+          "cast_shadows": true,
+          "local_bounds": {
+            "min": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "max": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          }
+        },
+        "RigidBody": {
+          "allow_sleeping": true,
+          "angular_damping": 0.05000000074505806,
+          "collision_layer": 0,
+          "continuous_collision": false,
+          "friction": 0.5,
+          "gravity_factor": 1.0,
+          "initial_angular_velocity": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "initial_linear_velocity": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "is_sensor": false,
+          "linear_damping": 0.05000000074505806,
+          "locked_dofs": 0,
+          "mass": 0.0,
+          "motion": "dynamic",
+          "restitution": 0.0
+        },
+        "Collider": {
+          "half_extents": [
+            0.5,
+            0.5,
+            0.5
+          ],
+          "local_offset": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "local_rotation": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "shape": "box"
+        }
+      }
+    },
+    {
+      "uuid": "33a47d1c934b4cd3",
+      "components": {
+        "Name": {
+          "name": "Box 1"
+        },
+        "Transform": {
+          "position": [
+            -0.5500001,
+            2.5,
+            -2.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        "Visibility": {
+          "visible": true
+        },
+        "MeshRenderer": {
+          "mesh": "1404bb577a277ca8ad27f10d368c71c3",
+          "material": "c60cb23e63223893b144842abd91e230",
+          "cast_shadows": true,
+          "local_bounds": {
+            "min": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "max": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          }
+        },
+        "RigidBody": {
+          "allow_sleeping": true,
+          "angular_damping": 0.05000000074505806,
+          "collision_layer": 0,
+          "continuous_collision": false,
+          "friction": 0.5,
+          "gravity_factor": 1.0,
+          "initial_angular_velocity": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "initial_linear_velocity": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "is_sensor": false,
+          "linear_damping": 0.05000000074505806,
+          "locked_dofs": 0,
+          "mass": 0.0,
+          "motion": "dynamic",
+          "restitution": 0.0
+        },
+        "Collider": {
+          "half_extents": [
+            0.5,
+            0.5,
+            0.5
+          ],
+          "local_offset": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "local_rotation": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "shape": "box"
+        }
+      }
+    },
+    {
+      "uuid": "bc9bd807cc741d22",
+      "components": {
+        "Name": {
+          "name": "Box 2"
+        },
+        "Transform": {
+          "position": [
+            0.49999988,
+            2.5,
+            -2.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        "Visibility": {
+          "visible": true
+        },
+        "MeshRenderer": {
+          "mesh": "1404bb577a277ca8ad27f10d368c71c3",
+          "material": "d195500a53a055b5651a3e120ec94062",
+          "cast_shadows": true,
+          "local_bounds": {
+            "min": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "max": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          }
+        },
+        "RigidBody": {
+          "allow_sleeping": true,
+          "angular_damping": 0.05000000074505806,
+          "collision_layer": 0,
+          "continuous_collision": false,
+          "friction": 0.5,
+          "gravity_factor": 1.0,
+          "initial_angular_velocity": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "initial_linear_velocity": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "is_sensor": false,
+          "linear_damping": 0.05000000074505806,
+          "locked_dofs": 0,
+          "mass": 0.0,
+          "motion": "dynamic",
+          "restitution": 0.0
+        },
+        "Collider": {
+          "half_extents": [
+            0.5,
+            0.5,
+            0.5
+          ],
+          "local_offset": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "local_rotation": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "shape": "box"
+        }
+      }
+    },
+    {
+      "uuid": "0a2f3a1ba987bf13",
+      "components": {
+        "Name": {
+          "name": "Box 3"
+        },
+        "Transform": {
+          "position": [
+            1.5499998,
+            2.5,
+            -2.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        "Visibility": {
+          "visible": true
+        },
+        "MeshRenderer": {
+          "mesh": "1404bb577a277ca8ad27f10d368c71c3",
+          "material": "a3dda6cfaa172e2ae744affcda30bbbb",
+          "cast_shadows": true,
+          "local_bounds": {
+            "min": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "max": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          }
+        },
+        "RigidBody": {
+          "allow_sleeping": true,
+          "angular_damping": 0.05000000074505806,
+          "collision_layer": 0,
+          "continuous_collision": false,
+          "friction": 0.5,
+          "gravity_factor": 1.0,
+          "initial_angular_velocity": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "initial_linear_velocity": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "is_sensor": false,
+          "linear_damping": 0.05000000074505806,
+          "locked_dofs": 0,
+          "mass": 0.0,
+          "motion": "dynamic",
+          "restitution": 0.0
+        },
+        "Collider": {
+          "half_extents": [
+            0.5,
+            0.5,
+            0.5
+          ],
+          "local_offset": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "local_rotation": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "shape": "box"
+        }
+      }
+    },
+    {
+      "uuid": "d033ef9cb1a1320f",
+      "components": {
+        "Name": {
+          "name": "Box 4"
+        },
+        "Transform": {
+          "position": [
+            -1.08,
+            3.52,
+            -2.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        "Visibility": {
+          "visible": true
+        },
+        "MeshRenderer": {
+          "mesh": "1404bb577a277ca8ad27f10d368c71c3",
+          "material": "c60cb23e63223893b144842abd91e230",
+          "cast_shadows": true,
+          "local_bounds": {
+            "min": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "max": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          }
+        },
+        "RigidBody": {
+          "allow_sleeping": true,
+          "angular_damping": 0.05000000074505806,
+          "collision_layer": 0,
+          "continuous_collision": false,
+          "friction": 0.5,
+          "gravity_factor": 1.0,
+          "initial_angular_velocity": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "initial_linear_velocity": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "is_sensor": false,
+          "linear_damping": 0.05000000074505806,
+          "locked_dofs": 0,
+          "mass": 0.0,
+          "motion": "dynamic",
+          "restitution": 0.0
+        },
+        "Collider": {
+          "half_extents": [
+            0.5,
+            0.5,
+            0.5
+          ],
+          "local_offset": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "local_rotation": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "shape": "box"
+        }
+      }
+    },
+    {
+      "uuid": "ef8a588bc3f14671",
+      "components": {
+        "Name": {
+          "name": "Box 5"
+        },
+        "Transform": {
+          "position": [
+            -0.03000009,
+            3.52,
+            -2.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        "Visibility": {
+          "visible": true
+        },
+        "MeshRenderer": {
+          "mesh": "1404bb577a277ca8ad27f10d368c71c3",
+          "material": "d195500a53a055b5651a3e120ec94062",
+          "cast_shadows": true,
+          "local_bounds": {
+            "min": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "max": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          }
+        },
+        "RigidBody": {
+          "allow_sleeping": true,
+          "angular_damping": 0.05000000074505806,
+          "collision_layer": 0,
+          "continuous_collision": false,
+          "friction": 0.5,
+          "gravity_factor": 1.0,
+          "initial_angular_velocity": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "initial_linear_velocity": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "is_sensor": false,
+          "linear_damping": 0.05000000074505806,
+          "locked_dofs": 0,
+          "mass": 0.0,
+          "motion": "dynamic",
+          "restitution": 0.0
+        },
+        "Collider": {
+          "half_extents": [
+            0.5,
+            0.5,
+            0.5
+          ],
+          "local_offset": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "local_rotation": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "shape": "box"
+        }
+      }
+    },
+    {
+      "uuid": "d2468e468f65fcb9",
+      "components": {
+        "Name": {
+          "name": "Box 6"
+        },
+        "Transform": {
+          "position": [
+            1.0199999,
+            3.52,
+            -2.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        "Visibility": {
+          "visible": true
+        },
+        "MeshRenderer": {
+          "mesh": "1404bb577a277ca8ad27f10d368c71c3",
+          "material": "a3dda6cfaa172e2ae744affcda30bbbb",
+          "cast_shadows": true,
+          "local_bounds": {
+            "min": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "max": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          }
+        },
+        "RigidBody": {
+          "allow_sleeping": true,
+          "angular_damping": 0.05000000074505806,
+          "collision_layer": 0,
+          "continuous_collision": false,
+          "friction": 0.5,
+          "gravity_factor": 1.0,
+          "initial_angular_velocity": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "initial_linear_velocity": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "is_sensor": false,
+          "linear_damping": 0.05000000074505806,
+          "locked_dofs": 0,
+          "mass": 0.0,
+          "motion": "dynamic",
+          "restitution": 0.0
+        },
+        "Collider": {
+          "half_extents": [
+            0.5,
+            0.5,
+            0.5
+          ],
+          "local_offset": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "local_rotation": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "shape": "box"
+        }
+      }
+    },
+    {
+      "uuid": "7c90e3e91093820d",
+      "components": {
+        "Name": {
+          "name": "Box 7"
+        },
+        "Transform": {
+          "position": [
+            -0.56000006,
+            4.54,
+            -2.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        "Visibility": {
+          "visible": true
+        },
+        "MeshRenderer": {
+          "mesh": "1404bb577a277ca8ad27f10d368c71c3",
+          "material": "c60cb23e63223893b144842abd91e230",
+          "cast_shadows": true,
+          "local_bounds": {
+            "min": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "max": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          }
+        },
+        "RigidBody": {
+          "allow_sleeping": true,
+          "angular_damping": 0.05000000074505806,
+          "collision_layer": 0,
+          "continuous_collision": false,
+          "friction": 0.5,
+          "gravity_factor": 1.0,
+          "initial_angular_velocity": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "initial_linear_velocity": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "is_sensor": false,
+          "linear_damping": 0.05000000074505806,
+          "locked_dofs": 0,
+          "mass": 0.0,
+          "motion": "dynamic",
+          "restitution": 0.0
+        },
+        "Collider": {
+          "half_extents": [
+            0.5,
+            0.5,
+            0.5
+          ],
+          "local_offset": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "local_rotation": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "shape": "box"
+        }
+      }
+    },
+    {
+      "uuid": "7c56610781f8c43a",
+      "components": {
+        "Name": {
+          "name": "Box 8"
+        },
+        "Transform": {
+          "position": [
+            0.4899999,
+            4.54,
+            -2.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        "Visibility": {
+          "visible": true
+        },
+        "MeshRenderer": {
+          "mesh": "1404bb577a277ca8ad27f10d368c71c3",
+          "material": "d195500a53a055b5651a3e120ec94062",
+          "cast_shadows": true,
+          "local_bounds": {
+            "min": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "max": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          }
+        },
+        "RigidBody": {
+          "allow_sleeping": true,
+          "angular_damping": 0.05000000074505806,
+          "collision_layer": 0,
+          "continuous_collision": false,
+          "friction": 0.5,
+          "gravity_factor": 1.0,
+          "initial_angular_velocity": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "initial_linear_velocity": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "is_sensor": false,
+          "linear_damping": 0.05000000074505806,
+          "locked_dofs": 0,
+          "mass": 0.0,
+          "motion": "dynamic",
+          "restitution": 0.0
+        },
+        "Collider": {
+          "half_extents": [
+            0.5,
+            0.5,
+            0.5
+          ],
+          "local_offset": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "local_rotation": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "shape": "box"
+        }
+      }
+    },
+    {
+      "uuid": "6581ca3b0de03443",
+      "components": {
+        "Name": {
+          "name": "Box 9"
+        },
+        "Transform": {
+          "position": [
+            -0.04000008,
+            5.56,
+            -2.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        "Visibility": {
+          "visible": true
+        },
+        "MeshRenderer": {
+          "mesh": "1404bb577a277ca8ad27f10d368c71c3",
+          "material": "a3dda6cfaa172e2ae744affcda30bbbb",
+          "cast_shadows": true,
+          "local_bounds": {
+            "min": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "max": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          }
+        },
+        "RigidBody": {
+          "allow_sleeping": true,
+          "angular_damping": 0.05000000074505806,
+          "collision_layer": 0,
+          "continuous_collision": false,
+          "friction": 0.5,
+          "gravity_factor": 1.0,
+          "initial_angular_velocity": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "initial_linear_velocity": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "is_sensor": false,
+          "linear_damping": 0.05000000074505806,
+          "locked_dofs": 0,
+          "mass": 0.0,
+          "motion": "dynamic",
+          "restitution": 0.0
+        },
+        "Collider": {
+          "half_extents": [
+            0.5,
+            0.5,
+            0.5
+          ],
+          "local_offset": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "local_rotation": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "shape": "box"
+        }
+      }
+    },
+    {
+      "uuid": "2085fe7e267dbdae",
+      "components": {
+        "Name": {
+          "name": "Ball 0"
+        },
+        "Transform": {
+          "position": [
+            2.5,
+            4.0,
+            -1.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        "Visibility": {
+          "visible": true
+        },
+        "MeshRenderer": {
+          "mesh": "8b42637f251c7ff8f22c6778a6c6d083",
+          "material": "bf024163de2a4307bc1a94b3f034e6bf",
+          "cast_shadows": true,
+          "local_bounds": {
+            "min": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "max": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          }
+        },
+        "RigidBody": {
+          "allow_sleeping": true,
+          "angular_damping": 0.05000000074505806,
+          "collision_layer": 0,
+          "continuous_collision": false,
+          "friction": 0.5,
+          "gravity_factor": 1.0,
+          "initial_angular_velocity": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "initial_linear_velocity": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "is_sensor": false,
+          "linear_damping": 0.05000000074505806,
+          "locked_dofs": 0,
+          "mass": 0.0,
+          "motion": "dynamic",
+          "restitution": 0.6000000238418579
+        },
+        "Collider": {
+          "local_offset": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "local_rotation": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "radius": 0.5,
+          "shape": "sphere"
+        }
+      }
+    },
+    {
+      "uuid": "ab9b20ab73e7df29",
+      "components": {
+        "Name": {
+          "name": "Ball 1"
+        },
+        "Transform": {
+          "position": [
+            2.8,
+            5.5,
+            -0.8
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        "Visibility": {
+          "visible": true
+        },
+        "MeshRenderer": {
+          "mesh": "8b42637f251c7ff8f22c6778a6c6d083",
+          "material": "bf024163de2a4307bc1a94b3f034e6bf",
+          "cast_shadows": true,
+          "local_bounds": {
+            "min": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "max": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          }
+        },
+        "RigidBody": {
+          "allow_sleeping": true,
+          "angular_damping": 0.05000000074505806,
+          "collision_layer": 0,
+          "continuous_collision": false,
+          "friction": 0.5,
+          "gravity_factor": 1.0,
+          "initial_angular_velocity": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "initial_linear_velocity": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "is_sensor": false,
+          "linear_damping": 0.05000000074505806,
+          "locked_dofs": 0,
+          "mass": 0.0,
+          "motion": "dynamic",
+          "restitution": 0.6000000238418579
+        },
+        "Collider": {
+          "local_offset": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "local_rotation": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "radius": 0.5,
+          "shape": "sphere"
+        }
+      }
+    },
+    {
+      "uuid": "41f5e3c59f0d0304",
+      "components": {
+        "Name": {
+          "name": "Ball 2"
+        },
+        "Transform": {
+          "position": [
+            3.1,
+            7.0,
+            -0.6
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        "Visibility": {
+          "visible": true
+        },
+        "MeshRenderer": {
+          "mesh": "8b42637f251c7ff8f22c6778a6c6d083",
+          "material": "bf024163de2a4307bc1a94b3f034e6bf",
+          "cast_shadows": true,
+          "local_bounds": {
+            "min": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "max": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          }
+        },
+        "RigidBody": {
+          "allow_sleeping": true,
+          "angular_damping": 0.05000000074505806,
+          "collision_layer": 0,
+          "continuous_collision": false,
+          "friction": 0.5,
+          "gravity_factor": 1.0,
+          "initial_angular_velocity": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "initial_linear_velocity": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "is_sensor": false,
+          "linear_damping": 0.05000000074505806,
+          "locked_dofs": 0,
+          "mass": 0.0,
+          "motion": "dynamic",
+          "restitution": 0.6000000238418579
+        },
+        "Collider": {
+          "local_offset": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "local_rotation": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "radius": 0.5,
+          "shape": "sphere"
+        }
+      }
+    },
+    {
+      "uuid": "8ad3dcd3c1145c0d",
+      "components": {
+        "Name": {
+          "name": "Launcher"
+        },
+        "Transform": {
+          "position": [
+            4.0,
+            0.5,
+            2.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        "Visibility": {
+          "visible": true
+        },
+        "MeshRenderer": {
+          "mesh": "1404bb577a277ca8ad27f10d368c71c3",
+          "material": "d195500a53a055b5651a3e120ec94062",
+          "cast_shadows": true,
+          "local_bounds": {
+            "min": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "max": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          }
+        },
+        "RigidBody": {
+          "allow_sleeping": true,
+          "angular_damping": 0.05000000074505806,
+          "collision_layer": 0,
+          "continuous_collision": false,
+          "friction": 0.5,
+          "gravity_factor": 1.0,
+          "initial_angular_velocity": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "initial_linear_velocity": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "is_sensor": false,
+          "linear_damping": 0.05000000074505806,
+          "locked_dofs": 0,
+          "mass": 0.0,
+          "motion": "dynamic",
+          "restitution": 0.0
+        },
+        "Collider": {
+          "half_extents": [
+            0.5,
+            0.5,
+            0.5
+          ],
+          "local_offset": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "local_rotation": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "shape": "box"
+        },
+        "Script": {
+          "enabled": true,
+          "properties": [
+            {
+              "name": "interval",
+              "value": 1.5
+            }
+          ],
+          "script": "slice/launcher.lua"
+        }
+      }
+    },
+    {
+      "uuid": "5411343b313d0edd",
+      "components": {
+        "Name": {
+          "name": "Bobber"
+        },
+        "Transform": {
+          "position": [
+            -4.0,
+            1.5,
+            2.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        "Visibility": {
+          "visible": true
+        },
+        "MeshRenderer": {
+          "mesh": "8b42637f251c7ff8f22c6778a6c6d083",
+          "material": "c60cb23e63223893b144842abd91e230",
+          "cast_shadows": true,
+          "local_bounds": {
+            "min": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "max": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          }
+        },
+        "Script": {
+          "enabled": true,
+          "properties": [
+            {
+              "name": "height",
+              "value": 0.6
+            }
+          ],
+          "script": "bobber.lua"
+        }
+      }
+    },
+    {
+      "uuid": "95ea751254efc57f",
+      "components": {
+        "Name": {
+          "name": "Spinner"
+        },
+        "Transform": {
+          "position": [
+            0.0,
+            1.0,
+            3.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "scale": [
+            0.5,
+            0.5,
+            0.5
+          ]
+        },
+        "Visibility": {
+          "visible": true
+        },
+        "MeshRenderer": {
+          "mesh": "81f2923932880ea0acb27abc0a562941",
+          "material": "a3dda6cfaa172e2ae744affcda30bbbb",
+          "cast_shadows": true,
+          "local_bounds": {
+            "min": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "max": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          }
+        },
+        "Script": {
+          "enabled": true,
+          "properties": [
+            {
+              "name": "speed",
+              "value": 120.0
+            },
+            {
+              "name": "axis",
+              "value": {
+                "vec3": [
+                  1.0,
+                  0.0,
+                  0.0
+                ]
+              }
+            }
+          ],
+          "script": "rotator.lua"
+        }
+      }
+    },
+    {
+      "uuid": "09c5d78e6b12b1f1",
+      "components": {
+        "Name": {
+          "name": "Spawner"
+        },
+        "Transform": {
+          "position": [
+            0.0,
+            0.2,
+            5.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        "Visibility": {
+          "visible": true
+        },
+        "Script": {
+          "enabled": true,
+          "properties": [
+            {
+              "name": "interval",
+              "value": 0.5
+            }
+          ],
+          "script": "spawner.lua"
+        }
+      }
+    },
+    {
+      "uuid": "97bb372affbf38dd",
+      "components": {
+        "Name": {
+          "name": "Textured Cube"
+        },
+        "Transform": {
+          "position": [
+            -2.5,
+            1.2,
+            1.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        "Visibility": {
+          "visible": true
+        },
+        "Script": {
+          "enabled": true,
+          "properties": [
+            {
+              "name": "speed",
+              "value": 45.0
+            }
+          ],
+          "script": "rotator.lua"
+        }
+      }
+    },
+    {
+      "uuid": "78a121443914e9bf",
+      "parent": "97bb372affbf38dd",
+      "components": {
+        "Name": {
+          "name": "Cube"
+        },
+        "Transform": {
+          "position": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        "Visibility": {
+          "visible": true
+        },
+        "MeshRenderer": {
+          "mesh": "9fcbc245be47700c912a949ad5ca0773",
+          "material": "0b34c3026e5407a1cdc6b668855a5487",
+          "cast_shadows": true,
+          "local_bounds": {
+            "min": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "max": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          }
+        }
+      }
+    },
+    {
+      "uuid": "f2854309db209bc1",
+      "components": {
+        "Name": {
+          "name": "skinned.gltf"
+        },
+        "Transform": {
+          "position": [
+            2.0,
+            0.0,
+            1.5
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        "Visibility": {
+          "visible": true
+        }
+      }
+    },
+    {
+      "uuid": "7468c4be91e9b0a0",
+      "parent": "f2854309db209bc1",
+      "components": {
+        "Name": {
+          "name": "Armature"
+        },
+        "Transform": {
+          "position": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        "Visibility": {
+          "visible": true
+        }
+      }
+    },
+    {
+      "uuid": "0b46630a36d14960",
+      "parent": "7468c4be91e9b0a0",
+      "components": {
+        "Name": {
+          "name": "Bone_Root"
+        },
+        "Transform": {
+          "position": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        "Visibility": {
+          "visible": true
+        }
+      }
+    },
+    {
+      "uuid": "2276e8f52535eec8",
+      "parent": "0b46630a36d14960",
+      "components": {
+        "Name": {
+          "name": "Bone_Mid"
+        },
+        "Transform": {
+          "position": [
+            0.0,
+            1.0,
+            0.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        "Visibility": {
+          "visible": true
+        }
+      }
+    },
+    {
+      "uuid": "1c64c1d22626140b",
+      "parent": "2276e8f52535eec8",
+      "components": {
+        "Name": {
+          "name": "Bone_Tip"
+        },
+        "Transform": {
+          "position": [
+            0.0,
+            1.0,
+            0.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        "Visibility": {
+          "visible": true
+        }
+      }
+    },
+    {
+      "uuid": "cdc188a5781e6470",
+      "parent": "7468c4be91e9b0a0",
+      "components": {
+        "Name": {
+          "name": "SkinnedBar"
+        },
+        "Transform": {
+          "position": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        "Visibility": {
+          "visible": true
+        },
+        "MeshRenderer": {
+          "mesh": "a0b7a1e8c80c0749436382273ce0a043",
+          "material": "c723826ba72452e7d0c9b3580adc5337",
+          "cast_shadows": true,
+          "local_bounds": {
+            "min": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "max": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          }
+        },
+        "Animator": {
+          "enabled": true,
+          "graph": "e3923886674202aef3a3ab445159bbd3",
+          "paused": false,
+          "playback_rate": 1.0,
+          "root_motion": {
+            "horizontal": true,
+            "mode": "ignore",
+            "vertical": false,
+            "yaw": true
+          },
+          "skeleton": "6f667268a110371850f5c77329c23de1"
+        }
+      }
+    }
+  ]
+}
