@@ -20,7 +20,9 @@ else()
 endif()
 
 if(TARGET aether.scripting)
-    list(APPEND _gameplay_private_deps aether::scripting)
+    # scripting_lua = aether::scripting + sol2 with the module's exact configuration; only
+    # src/lua_bindings.cpp includes lua_integration.h.
+    list(APPEND _gameplay_private_deps aether::scripting_lua)
     list(APPEND _gameplay_private_defines AE_WITH_SCRIPTING=1)
 else()
     list(APPEND _gameplay_private_defines AE_WITH_SCRIPTING=0)
@@ -37,6 +39,7 @@ aether_add_module(gameplay
         src/scene_instantiation.cpp
         src/component_codecs.cpp
         src/procedural_mesh.cpp
+        src/environment.cpp
         src/asset_hot_reload.cpp
         src/lua_bindings.cpp
         src/imgui_panels.cpp
@@ -64,5 +67,9 @@ if(TARGET test.gameplay)
     # Tests build physics components / query the private test seams.
     target_link_libraries(test.gameplay PRIVATE aether::physics nlohmann_json::nlohmann_json)
     target_include_directories(test.gameplay PRIVATE src)
-    target_compile_definitions(test.gameplay PRIVATE ${_gameplay_private_defines})
+    target_compile_definitions(test.gameplay PRIVATE ${_gameplay_private_defines}
+        AE_TEST_CONTENT_DIR="${CMAKE_SOURCE_DIR}/content")
+    if(TARGET aether.animation)
+        target_link_libraries(test.gameplay PRIVATE aether::animation)
+    endif()
 endif()

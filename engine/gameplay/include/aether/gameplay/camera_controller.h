@@ -19,6 +19,7 @@
 #include "aether/core/math.h"
 #include "aether/core/subsystem.h"
 #include "aether/core/types.h"
+#include "aether/gameplay/input_map.h"
 #include "aether/scene/entity.h"
 
 namespace aether {
@@ -27,7 +28,6 @@ class World;
 
 namespace aether::gameplay {
 
-class InputMap;
 class InputSubsystem;
 
 struct FlyCameraComponent {
@@ -83,6 +83,7 @@ public:
 private:
     InputSubsystem* input_ = nullptr;
     EngineContext*  engine_ = nullptr;
+    InputMap        own_map_; // used when input_ == nullptr
 };
 
 } // namespace aether::gameplay

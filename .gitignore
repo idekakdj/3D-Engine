@@ -37,3 +37,6 @@ compile_commands.json
 
 # Dependency cache is stored outside the repo (FETCHCONTENT_BASE_DIR); ignore any stray local copy
 /third_party/.cache/
+
+# Cooked asset cache (paths::asset_dir(): <engine root>/assets, written by AssetManager / the cooker)
+/assets/
