@@ -1,0 +1,95 @@
+// shaders/renderer/light_cull.comp — clustered light assignment.
+// One workgroup per depth slice, one invocation per 16x9 screen tile. Each cluster builds
+// its view-space AABB from the tile corners (jittered inverse projection, matching
+// gl_FragCoord in the forward pass) and the exponential slice bounds, then tests every
+// point/spot light (spot cones via their bounding sphere). Lights are staged through
+// shared memory in batches. Output: counts[cluster] and a fixed-capacity index list per
+// cluster at [cluster * AE_MAX_LIGHTS_PER_CLUSTER, ...).
+#version 460
+#extension GL_GOOGLE_include_directive : require
+#include "common/bindless.glsl"
+#include "frame_data.glsl"
+
+layout(local_size_x = AE_CLUSTER_X, local_size_y = AE_CLUSTER_Y, local_size_z = 1) in;
+
+layout(push_constant, scalar) uniform LightCullPush {
+    FrameData      frame;
+    ClusterGrid    light_grid;
+    ClusterIndices light_indices;
+} pc;
+
+const uint kBatch = uint(AE_CLUSTER_X * AE_CLUSTER_Y);
+shared vec4 s_spheres[AE_CLUSTER_X * AE_CLUSTER_Y]; // view-space center + radius
+
+vec3 tile_ray(FrameData frame, vec2 pixel) {
+    vec2 ndc = pixel * frame.inv_viewport * 2.0 - 1.0;
+    vec4 p = frame.inv_proj * vec4(ndc, 0.5, 1.0);
+    vec3 v = p.xyz / p.w;
+    return v / max(-v.z, 1e-6); // point at view distance 1
+}
+
+bool sphere_intersects_aabb(vec4 s, vec3 mn, vec3 mx) {
+    vec3 d = clamp(s.xyz, mn, mx) - s.xyz;
+    return dot(d, d) <= s.w * s.w;
+}
+
+void main() {
+    FrameData frame = pc.frame;
+    uvec3 cid = uvec3(gl_LocalInvocationID.xy, gl_WorkGroupID.z);
+    uint  cluster = cid.x + uint(AE_CLUSTER_X) * (cid.y + uint(AE_CLUSTER_Y) * cid.z);
+
+    // ---- cluster bounds (view space; forward is -Z) ----
+    vec2  tile = vec2(frame.cluster_tile_w, frame.cluster_tile_h);
+    vec2  px_min = vec2(cid.xy) * tile;
+    vec2  px_max = min(px_min + tile, frame.viewport);
+    float ratio = frame.far_z / frame.near_z;
+    float z0 = frame.near_z * pow(ratio, float(cid.z) / float(AE_CLUSTER_Z));
+    float z1 = frame.near_z * pow(ratio, float(cid.z + 1u) / float(AE_CLUSTER_Z));
+    if (cid.z == 0u) {
+        z0 = 0.0; // the first slice also owns everything in front of it
+    }
+    vec3 mn = vec3(1e30);
+    vec3 mx = vec3(-1e30);
+    vec2 corners[4] = vec2[4](px_min, vec2(px_max.x, px_min.y), vec2(px_min.x, px_max.y), px_max);
+    for (int i = 0; i < 4; ++i) {
+        vec3 r = tile_ray(frame, corners[i]);
+        mn = min(mn, min(r * z0, r * z1));
+        mx = max(mx, max(r * z0, r * z1));
+    }
+
+    // ---- test local lights in shared-memory batches ----
+    uint total = frame.light_count - frame.directional_count;
+    uint count = 0u;
+    uint list_base = cluster * uint(AE_MAX_LIGHTS_PER_CLUSTER);
+    uint lid = gl_LocalInvocationIndex;
+    for (uint start = 0u; start < total; start += kBatch) {
+        uint li = start + lid;
+        if (li < total) {
+            GpuLight l = frame.lights.items[frame.directional_count + li];
+            vec3  center = l.position;
+            float radius = l.range;
+            if (l.type == AE_LIGHT_SPOT) {
+                // Bounding sphere of the cone (Wronski, "Cull that cone").
+                float c = clamp(-l.spot_offset / max(l.spot_scale, 1e-6), 1e-4, 1.0); // cos(outer)
+                if (c < 0.70710678) {
+                    center = l.position + l.direction * (l.range * c);
+                    radius = l.range * sqrt(max(0.0, 1.0 - c * c));
+                } else {
+                    radius = l.range / (2.0 * c);
+                    center = l.position + l.direction * radius;
+                }
+            }
+            s_spheres[lid] = vec4((frame.view * vec4(center, 1.0)).xyz, radius);
+        }
+        barrier();
+        uint n = min(kBatch, total - start);
+        for (uint k = 0u; k < n; ++k) {
+            if (count < uint(AE_MAX_LIGHTS_PER_CLUSTER) && sphere_intersects_aabb(s_spheres[k], mn, mx)) {
+                pc.light_indices.indices[list_base + count] = frame.directional_count + start + k;
+                ++count;
+            }
+        }
+        barrier();
+    }
+    pc.light_grid.counts[cluster] = count;
+}

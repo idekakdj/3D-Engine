@@ -1,0 +1,39 @@
+# Build output (kept OUTSIDE OneDrive per ADR-0001, but ignore any local build dir too)
+/build/
+build/
+out/
+*.user
+*.aps
+
+# OneDrive / Windows cruft
+desktop.ini
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# IDE
+.vs/
+.vscode/
+.idea/
+CMakeSettings.json
+*.VC.db
+*.VC.opendb
+
+# Compiled artifacts
+*.obj
+*.o
+*.exe
+*.pdb
+*.ilk
+*.lib
+*.a
+*.dll
+*.exp
+
+# Generated
+compile_commands.json
+/shaders/generated/
+*.spv.h
+
+# Dependency cache is stored outside the repo (FETCHCONTENT_BASE_DIR); ignore any stray local copy
+/third_party/.cache/

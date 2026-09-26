@@ -1,0 +1,42 @@
+// shaders/renderer/ssao_blur.comp — separable depth-aware (bilateral) Gaussian blur of
+// the half-resolution AO (RG16F: r = AO, g = linear depth; depth 0 = sky).
+#version 460
+#extension GL_GOOGLE_include_directive : require
+#include "common/bindless.glsl"
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(push_constant, scalar) uniform BlurPush {
+    uint  src_tex;
+    uint  dst_img;
+    uvec2 size;
+    ivec2 direction;
+    float sharpness;
+    uint  pad;
+} pc;
+
+void main() {
+    ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+    if (any(greaterThanEqual(uvec2(p), pc.size))) {
+        return;
+    }
+    vec2 center = texelFetch(AE_TEX2D(pc.src_tex), p, 0).rg;
+    if (center.g <= 0.0) {
+        imageStore(ae_img2d_rg16f[pc.dst_img], p, vec4(center, 0.0, 0.0));
+        return;
+    }
+    const float weights[5] = float[5](0.2270270, 0.1945946, 0.1216216, 0.0540541, 0.0162162);
+    float sum = center.r * weights[0];
+    float wsum = weights[0];
+    ivec2 hi = ivec2(pc.size) - 1;
+    for (int i = 1; i <= 4; ++i) {
+        for (int s = -1; s <= 1; s += 2) {
+            vec2  t = texelFetch(AE_TEX2D(pc.src_tex), clamp(p + pc.direction * (i * s), ivec2(0), hi), 0).rg;
+            float dz = abs(t.g - center.g) / max(center.g, 1e-4);
+            float w = t.g > 0.0 ? weights[i] * exp(-dz * pc.sharpness * 8.0) : 0.0;
+            sum += t.r * w;
+            wsum += w;
+        }
+    }
+    imageStore(ae_img2d_rg16f[pc.dst_img], p, vec4(sum / wsum, center.g, 0.0, 0.0));
+}

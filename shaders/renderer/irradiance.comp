@@ -1,0 +1,30 @@
+// shaders/renderer/irradiance.comp — diffuse irradiance cube via cosine-weighted filtered
+// importance sampling. Stores E / pi (mean cosine-weighted radiance), so shading computes
+// diffuse = albedo * irradiance(N).
+#version 460
+#extension GL_GOOGLE_include_directive : require
+#include "common/bindless.glsl"
+#include "ibl_common.glsl"
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+void main() {
+    uvec3 id = gl_GlobalInvocationID;
+    if (id.x >= pc.dst_size || id.y >= pc.dst_size || id.z >= 6u) {
+        return;
+    }
+    vec3 n = ibl_cube_dir(id.z, (vec2(id.xy) + 0.5) / float(pc.dst_size));
+    mat3 basis = ibl_basis(n);
+    uint count = max(pc.sample_count, 1u);
+    vec3 sum = vec3(0.0);
+    for (uint i = 0u; i < count; ++i) {
+        vec2  xi = ibl_hammersley(i, count);
+        float phi = 2.0 * AE_IBL_PI * xi.x;
+        float cos_t = sqrt(1.0 - xi.y);
+        float sin_t = sqrt(xi.y);
+        vec3  l = basis * vec3(cos(phi) * sin_t, sin(phi) * sin_t, cos_t);
+        float pdf = cos_t / AE_IBL_PI;
+        sum += textureLod(AE_TEXCUBE(pc.src_tex), l, ibl_source_lod(pdf, count)).rgb;
+    }
+    imageStore(ae_img2darray_rgba16f[pc.dst_img], ivec3(id), vec4(sum / float(count), 1.0));
+}

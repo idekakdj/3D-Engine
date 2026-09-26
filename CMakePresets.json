@@ -1,0 +1,174 @@
+{
+  "version": 3,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 25,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "base",
+      "hidden": true,
+      "generator": "Ninja",
+      "binaryDir": "C:/Users/paulc/.aether/build/${presetName}",
+      "cacheVariables": {
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+        "AE_BUILD_TESTS": "ON"
+      }
+    },
+    {
+      "name": "debug-base",
+      "hidden": true,
+      "inherits": "base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug"
+      }
+    },
+    {
+      "name": "msvc-x64-debug",
+      "displayName": "MSVC x64 Debug (all modules)",
+      "inherits": "debug-base"
+    },
+    {
+      "name": "msvc-x64-reldbg",
+      "displayName": "MSVC x64 RelWithDebInfo (all modules)",
+      "inherits": "base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo"
+      }
+    },
+    {
+      "name": "msvc-x64-release",
+      "displayName": "MSVC x64 Release (all modules)",
+      "inherits": "base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release"
+      }
+    },
+    {
+      "name": "wip-core-rhi",
+      "displayName": "WIP: core + rhi + samples",
+      "inherits": "debug-base",
+      "cacheVariables": {
+        "AE_MODULES": "core;rhi;samples"
+      }
+    },
+    {
+      "name": "wip-scene",
+      "displayName": "WIP: scene",
+      "inherits": "debug-base",
+      "cacheVariables": {
+        "AE_MODULES": "core;scene"
+      }
+    },
+    {
+      "name": "wip-assets",
+      "displayName": "WIP: assets",
+      "inherits": "debug-base",
+      "cacheVariables": {
+        "AE_MODULES": "core;assets"
+      }
+    },
+    {
+      "name": "wip-renderer",
+      "displayName": "WIP: renderer",
+      "inherits": "debug-base",
+      "cacheVariables": {
+        "AE_MODULES": "core;rhi;renderer"
+      }
+    },
+    {
+      "name": "wip-physics",
+      "displayName": "WIP: physics",
+      "inherits": "debug-base",
+      "cacheVariables": {
+        "AE_MODULES": "core;scene;physics"
+      }
+    },
+    {
+      "name": "wip-animation",
+      "displayName": "WIP: animation",
+      "inherits": "debug-base",
+      "cacheVariables": {
+        "AE_MODULES": "core;scene;assets;animation"
+      }
+    },
+    {
+      "name": "wip-scripting",
+      "displayName": "WIP: scripting",
+      "inherits": "debug-base",
+      "cacheVariables": {
+        "AE_MODULES": "core;scene;scripting"
+      }
+    },
+    {
+      "name": "wip-gameplay",
+      "displayName": "WIP: gameplay + editor + samples",
+      "inherits": "debug-base"
+    },
+    {
+      "name": "wip-editor",
+      "displayName": "WIP: editor (all modules)",
+      "inherits": "debug-base"
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "msvc-x64-debug",
+      "configurePreset": "msvc-x64-debug"
+    },
+    {
+      "name": "msvc-x64-reldbg",
+      "configurePreset": "msvc-x64-reldbg"
+    },
+    {
+      "name": "msvc-x64-release",
+      "configurePreset": "msvc-x64-release"
+    },
+    {
+      "name": "wip-core-rhi",
+      "configurePreset": "wip-core-rhi",
+      "jobs": 8
+    },
+    {
+      "name": "wip-scene",
+      "configurePreset": "wip-scene",
+      "jobs": 4
+    },
+    {
+      "name": "wip-assets",
+      "configurePreset": "wip-assets",
+      "jobs": 4
+    },
+    {
+      "name": "wip-renderer",
+      "configurePreset": "wip-renderer",
+      "jobs": 4
+    },
+    {
+      "name": "wip-physics",
+      "configurePreset": "wip-physics",
+      "jobs": 4
+    },
+    {
+      "name": "wip-animation",
+      "configurePreset": "wip-animation",
+      "jobs": 4
+    },
+    {
+      "name": "wip-scripting",
+      "configurePreset": "wip-scripting",
+      "jobs": 4
+    },
+    {
+      "name": "wip-gameplay",
+      "configurePreset": "wip-gameplay",
+      "jobs": 6
+    },
+    {
+      "name": "wip-editor",
+      "configurePreset": "wip-editor",
+      "jobs": 6
+    }
+  ]
+}

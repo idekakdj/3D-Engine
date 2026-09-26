@@ -1,0 +1,91 @@
+// shaders/renderer/ssao.comp — half-resolution normal-oriented hemisphere SSAO.
+// Normals are reconstructed from depth (smallest-difference neighbours, robust at edges).
+// Output RG16F: r = ambient visibility, g = linear view depth (for the bilateral blur).
+#version 460
+#extension GL_GOOGLE_include_directive : require
+#include "common/bindless.glsl"
+#include "frame_data.glsl"
+#include "color.glsl"
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(push_constant, scalar) uniform SsaoPush {
+    FrameData frame;
+    uint      depth_tex;
+    uint      out_img;
+    uvec2     out_size;
+    float     radius;
+    float     intensity;
+    float     bias;
+    uint      sample_count;
+} pc;
+
+vec3 view_pos(FrameData frame, vec2 uv, float depth) {
+    vec4 p = frame.inv_proj * vec4(uv * 2.0 - 1.0, depth, 1.0);
+    return p.xyz / p.w;
+}
+
+float fetch_depth(ivec2 p, ivec2 size) {
+    return texelFetch(AE_TEX2D(pc.depth_tex), clamp(p, ivec2(0), size - 1), 0).r;
+}
+
+void main() {
+    ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+    if (any(greaterThanEqual(uvec2(p), pc.out_size))) {
+        return;
+    }
+    FrameData frame = pc.frame;
+    ivec2 full = textureSize(AE_TEX2D(pc.depth_tex), 0);
+    ivec2 q = min(p * 2, full - 1);
+    float d = fetch_depth(q, full);
+    if (d <= 0.0) { // sky (reverse-Z far plane)
+        imageStore(ae_img2d_rg16f[pc.out_img], p, vec4(1.0, 0.0, 0.0, 0.0));
+        return;
+    }
+    vec2 inv_full = 1.0 / vec2(full);
+    vec3 P = view_pos(frame, (vec2(q) + 0.5) * inv_full, d);
+
+    // Depth-reconstructed normal: pick the neighbour pair with the smaller depth delta.
+    vec3 pl = view_pos(frame, (vec2(q + ivec2(-1, 0)) + 0.5) * inv_full, fetch_depth(q + ivec2(-1, 0), full));
+    vec3 pr = view_pos(frame, (vec2(q + ivec2(1, 0)) + 0.5) * inv_full, fetch_depth(q + ivec2(1, 0), full));
+    vec3 pu = view_pos(frame, (vec2(q + ivec2(0, -1)) + 0.5) * inv_full, fetch_depth(q + ivec2(0, -1), full));
+    vec3 pd = view_pos(frame, (vec2(q + ivec2(0, 1)) + 0.5) * inv_full, fetch_depth(q + ivec2(0, 1), full));
+    vec3 dx = abs(pr.z - P.z) < abs(P.z - pl.z) ? pr - P : P - pl;
+    vec3 dy = abs(pd.z - P.z) < abs(P.z - pu.z) ? pd - P : P - pu;
+    vec3 N = ae_safe_normalize(cross(dy, dx));
+    if (dot(N, -P) < 0.0) {
+        N = -N;
+    }
+
+    // Per-pixel rotated tangent frame (interleaved gradient noise, varied per frame for TAA).
+    float angle = ae_ign(vec2(p) + float(frame.frame_index % 64u) * 5.588238) * 2.0 * AE_PI;
+    vec3  rnd = vec3(cos(angle), sin(angle), 0.0);
+    vec3  T = ae_safe_normalize(rnd - N * dot(rnd, N));
+    vec3  B = cross(N, T);
+    mat3  tbn = mat3(T, B, N);
+
+    uint  n = max(pc.sample_count, 1u);
+    float occlusion = 0.0;
+    for (uint i = 0u; i < n; ++i) {
+        // Fibonacci hemisphere direction, samples concentrated near the pixel.
+        float fi = (float(i) + 0.5) / float(n);
+        float phi = float(i) * 2.39996323;
+        float z = 1.0 - fi;
+        float r = sqrt(max(0.0, 1.0 - z * z));
+        vec3  h = vec3(cos(phi) * r, sin(phi) * r, z);
+        float scale = mix(0.1, 1.0, fi * fi);
+        vec3  s = P + tbn * h * (pc.radius * scale);
+
+        vec4 clip = frame.proj * vec4(s, 1.0);
+        vec2 suv = clip.xy / clip.w * 0.5 + 0.5;
+        if (any(lessThan(suv, vec2(0.0))) || any(greaterThan(suv, vec2(1.0)))) {
+            continue;
+        }
+        float sd = textureLod(AE_TEX2D(pc.depth_tex), suv, 0.0).r;
+        vec3  S = view_pos(frame, suv, sd);
+        float range = smoothstep(0.0, 1.0, pc.radius / max(abs(P.z - S.z), 1e-4));
+        occlusion += (S.z >= s.z + pc.bias ? 1.0 : 0.0) * range;
+    }
+    float ao = pow(clamp(1.0 - occlusion / float(n), 0.0, 1.0), pc.intensity);
+    imageStore(ae_img2d_rg16f[pc.out_img], p, vec4(ao, -P.z, 0.0, 0.0));
+}

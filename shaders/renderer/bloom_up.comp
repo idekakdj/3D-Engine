@@ -1,0 +1,43 @@
+// shaders/renderer/bloom_up.comp — 3x3 tent upsample of the smaller level, accumulated
+// onto this level's downsample: up[i] = down[i] + tent(up[i + 1]).
+#version 460
+#extension GL_GOOGLE_include_directive : require
+#include "common/bindless.glsl"
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(push_constant, scalar) uniform BloomPush {
+    uint  src_tex;
+    uint  add_tex;
+    uint  dst_img;
+    uint  flags;
+    vec2  src_texel;
+    uvec2 dst_size;
+    float radius;
+    uint  pad0;
+    uint  pad1;
+    uint  pad2;
+} pc;
+
+void main() {
+    ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+    if (any(greaterThanEqual(uvec2(p), pc.dst_size))) {
+        return;
+    }
+    vec2 uv = (vec2(p) + 0.5) / vec2(pc.dst_size);
+    vec2 o = pc.src_texel * pc.radius;
+    vec3 s = textureLod(AE_TEX2D(pc.src_tex), uv, 0.0).rgb * 4.0;
+    s += (textureLod(AE_TEX2D(pc.src_tex), uv + vec2(-o.x, 0.0), 0.0).rgb +
+          textureLod(AE_TEX2D(pc.src_tex), uv + vec2(o.x, 0.0), 0.0).rgb +
+          textureLod(AE_TEX2D(pc.src_tex), uv + vec2(0.0, -o.y), 0.0).rgb +
+          textureLod(AE_TEX2D(pc.src_tex), uv + vec2(0.0, o.y), 0.0).rgb) * 2.0;
+    s += textureLod(AE_TEX2D(pc.src_tex), uv + vec2(-o.x, -o.y), 0.0).rgb +
+         textureLod(AE_TEX2D(pc.src_tex), uv + vec2(o.x, -o.y), 0.0).rgb +
+         textureLod(AE_TEX2D(pc.src_tex), uv + vec2(-o.x, o.y), 0.0).rgb +
+         textureLod(AE_TEX2D(pc.src_tex), uv + vec2(o.x, o.y), 0.0).rgb;
+    vec3 result = s / 16.0;
+    if (pc.add_tex != AE_INVALID_INDEX) {
+        result += textureLod(AE_TEX2D(pc.add_tex), uv, 0.0).rgb;
+    }
+    imageStore(ae_img2d_rgba16f[pc.dst_img], p, vec4(result, 1.0));
+}

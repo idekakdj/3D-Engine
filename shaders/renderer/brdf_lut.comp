@@ -1,0 +1,45 @@
+// shaders/renderer/brdf_lut.comp — split-sum DFG LUT (x = NoV, y = perceptual roughness).
+// Uses the same height-correlated Smith term as the runtime BRDF: out = (A, B) with
+// specular = prefiltered * (F0 * A + B).
+#version 460
+#extension GL_GOOGLE_include_directive : require
+#include "common/bindless.glsl"
+#include "ibl_common.glsl"
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+float v_smith_ggx_correlated(float NoV, float NoL, float alpha) {
+    float a2 = alpha * alpha;
+    float gv = NoL * sqrt(NoV * NoV * (1.0 - a2) + a2);
+    float gl = NoV * sqrt(NoL * NoL * (1.0 - a2) + a2);
+    return 0.5 / max(gv + gl, 1e-6);
+}
+
+void main() {
+    uvec2 id = gl_GlobalInvocationID.xy;
+    if (id.x >= pc.dst_size || id.y >= pc.dst_size) {
+        return;
+    }
+    float NoV = (float(id.x) + 0.5) / float(pc.dst_size);
+    float roughness = (float(id.y) + 0.5) / float(pc.dst_size);
+    float alpha = roughness * roughness;
+    vec3  v = vec3(sqrt(1.0 - NoV * NoV), 0.0, NoV);
+    vec3  n = vec3(0.0, 0.0, 1.0);
+    uint  count = max(pc.sample_count, 1u);
+    float a = 0.0;
+    float b = 0.0;
+    for (uint i = 0u; i < count; ++i) {
+        vec3  h = ibl_importance_sample_ggx(ibl_hammersley(i, count), alpha, n);
+        vec3  l = 2.0 * dot(v, h) * h - v;
+        float NoL = clamp(l.z, 0.0, 1.0);
+        float NoH = clamp(h.z, 0.0, 1.0);
+        float VoH = clamp(dot(v, h), 0.0, 1.0);
+        if (NoL > 0.0) {
+            float gv = v_smith_ggx_correlated(NoV, NoL, alpha) * 4.0 * VoH * NoL / max(NoH, 1e-6);
+            float fc = pow(1.0 - VoH, 5.0);
+            a += (1.0 - fc) * gv;
+            b += fc * gv;
+        }
+    }
+    imageStore(ae_img2d_rg16f[pc.dst_img], ivec2(id), vec4(a / float(count), b / float(count), 0.0, 0.0));
+}
