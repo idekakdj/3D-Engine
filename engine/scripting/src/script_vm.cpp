@@ -1550,7 +1550,7 @@ Result<ScriptValue> ScriptVM::evaluate(std::string_view expression) {
 
 std::optional<ScriptValue> ScriptVM::get_global(std::string_view name) {
     return guarded(*impl_, "get_global", std::optional<ScriptValue>{}, [&] {
-        const sol::object o = impl_->console_env[name];
+        const sol::object o = impl_->console_env.get<sol::object>(name);
         return Impl::from_lua(o);
     });
 }
