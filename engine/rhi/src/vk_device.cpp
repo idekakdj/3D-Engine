@@ -7,6 +7,13 @@
 #include "vk_command_list.h"
 #include "vk_convert.h"
 
+#ifndef _WIN32
+// Non-Windows surfaces go through GLFW (volk.h above defines VK_VERSION_1_0, which makes
+// glfw3.h declare glfwCreateWindowSurface). Windows keeps the explicit Win32 path.
+#    define GLFW_INCLUDE_NONE
+#    include <GLFW/glfw3.h>
+#endif
+
 #include <algorithm>
 #include <cstdlib>
 #include <cstring>
@@ -212,7 +219,9 @@ Result<void> VulkanDevice::create_instance(const DeviceDesc& desc) {
     }
     if (extensions.empty()) {
         extensions.push_back(VK_KHR_SURFACE_EXTENSION_NAME);
+#ifdef _WIN32
         extensions.push_back(VK_KHR_WIN32_SURFACE_EXTENSION_NAME);
+#endif
     }
     debug_utils_ = has_extension(available, VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
     if (debug_utils_) {
@@ -285,7 +294,15 @@ Result<void> VulkanDevice::create_surface() {
     }
     return {};
 #else
-    return Error{ ErrorCode::Unsupported, "only Win32 surfaces are implemented" };
+    auto* glfw_window = static_cast<GLFWwindow*>(window_->glfw_handle());
+    if (glfw_window == nullptr) {
+        return Error{ ErrorCode::Unsupported, "window has no GLFW handle" };
+    }
+    const VkResult r = glfwCreateWindowSurface(instance_, glfw_window, nullptr, &surface_);
+    if (r != VK_SUCCESS) {
+        return Error{ ErrorCode::Unsupported, std::format("glfwCreateWindowSurface failed: {}", result_string(r)) };
+    }
+    return {};
 #endif
 }
 
