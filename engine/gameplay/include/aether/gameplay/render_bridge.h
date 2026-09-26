@@ -156,7 +156,12 @@ public:
     }
     // Runs after extraction (e.g. to append physics debug lines).
     void set_post_extract_hook(std::function<void(renderer::RenderScene&)> hook) { post_ = std::move(hook); }
+    // Replaces the default environment (the procedural sky registered at startup, see below).
     void set_environment(const renderer::EnvironmentSettings& env) { environment_ = env; }
+    [[nodiscard]] const renderer::EnvironmentSettings& environment() const noexcept { return environment_; }
+    // When enabled (default) the subsystem registers a procedural HDR sky (environment.h) at
+    // startup and uses it as skybox + IBL until set_environment() is called. Set before startup.
+    void set_default_sky(bool enabled) { default_sky_enabled_ = enabled; }
     void set_exposure(f32 exposure) { options_.exposure = exposure; }
 
     [[nodiscard]] const SceneExtractStats& last_stats() const noexcept { return stats_; }
@@ -168,6 +173,8 @@ private:
     SceneExtractOptions                          options_;
     std::function<void(renderer::RenderScene&)> post_;
     renderer::EnvironmentSettings                environment_{};
+    renderer::EnvHandle                          default_sky_;
+    bool                                         default_sky_enabled_ = true;
     SceneExtractStats                            stats_{};
 };
 

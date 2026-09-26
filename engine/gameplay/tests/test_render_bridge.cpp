@@ -65,6 +65,12 @@ TEST_CASE("procedural meshes are well formed") {
     CHECK(near(box.bounds.min, Vec3(-1, -2, -3)));
     CHECK(near(box.bounds.max, Vec3(1, 2, 3)));
     CHECK_FALSE(builtin_mesh_from_id(AssetId{ 5, 5 }).has_value());
+    for (u8 i = 0; i < static_cast<u8>(BuiltinMaterial::Count); ++i) {
+        const auto m = static_cast<BuiltinMaterial>(i);
+        CHECK(builtin_material_from_id(builtin_material_id(m)) == m);
+    }
+    CHECK(builtin_material_id(BuiltinMaterial::Default) == default_material_id());
+    CHECK(make_builtin_material(BuiltinMaterial::Gold).metallic_factor == 1.0f);
 }
 
 TEST_CASE("cache: built-in and runtime assets without an asset manager") {
@@ -84,6 +90,9 @@ TEST_CASE("cache: built-in and runtime assets without an asset manager") {
         CHECK(cache.material(AssetId{ 42, 42 }) == def);
         CHECK(cache.material(AssetId{}) == def);
         CHECK(cache.material(default_material_id()).is_valid());
+        const renderer::MaterialHandle gold = cache.material(builtin_material_id(BuiltinMaterial::Gold));
+        CHECK(gold != def);
+        CHECK(r.materials.back().metallic == 1.0f);
 
         assets::MaterialData red;
         red.base_color_factor = Vec4(1, 0, 0, 1);

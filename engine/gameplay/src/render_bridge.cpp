@@ -5,6 +5,7 @@
 #include "aether/assets/asset_manager.h"
 #include "aether/core/log.h"
 #include "aether/gameplay/components.h"
+#include "aether/gameplay/environment.h"
 #include "aether/gameplay/procedural_mesh.h"
 #include "aether/renderer/instance_flags.h"
 #include "aether/renderer/renderer.h"
@@ -314,9 +315,9 @@ struct RenderResourceCache::Impl {
             return &it->second;
         }
         MaterialEntry& e = materials[id];
-        if (id == default_material_id()) {
+        if (const auto builtin = builtin_material_from_id(id)) {
             e.runtime = true;
-            upload_material(e, make_default_material());
+            upload_material(e, make_builtin_material(*builtin));
             return &e;
         }
         if (!can_load()) {
@@ -674,11 +675,31 @@ RenderBridgeSubsystem::~RenderBridgeSubsystem() = default;
 void RenderBridgeSubsystem::on_startup(EngineContext& ctx) {
     engine_ = &ctx;
     if (!cache_ && ctx.renderer != nullptr) {
-        cache_ = std::make_unique<RenderResourceCache>(*static_cast<renderer::Renderer*>(ctx.renderer), assets_);
+        auto& r = *static_cast<renderer::Renderer*>(ctx.renderer);
+        cache_  = std::make_unique<RenderResourceCache>(r, assets_);
+        if (default_sky_enabled_ && !environment_.skybox.is_valid()) {
+            constexpr u32              w      = 256;
+            constexpr u32              h      = 128;
+            const std::vector<f32>     pixels = make_sky_equirect(w, h, SkySettings{});
+            renderer::EnvironmentUpload up;
+            up.width             = w;
+            up.height            = h;
+            up.rgba32f           = pixels;
+            up.debug_name        = "DefaultSky";
+            default_sky_         = r.register_environment(up);
+            environment_.skybox  = default_sky_;
+        }
     }
 }
 
 void RenderBridgeSubsystem::on_shutdown() {
+    if (cache_ && default_sky_.is_valid()) {
+        cache_->renderer().release(default_sky_);
+        if (environment_.skybox == default_sky_) {
+            environment_.skybox = {};
+        }
+        default_sky_ = {};
+    }
     cache_.reset();
     engine_ = nullptr;
 }

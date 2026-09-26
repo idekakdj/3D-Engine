@@ -1,5 +1,5 @@
 // vertical_slice — the M1 artifact (blueprint §14) on top of gameplay::Application:
-//   * clustered-forward PBR scene: sun (shadows) + point light, built-in meshes, runtime materials
+//   * clustered-forward PBR scene: sun (shadows) + point light, built-in meshes and materials
 //   * Jolt physics: a floor and a falling stack of boxes and spheres
 //   * the glTF cube sample (textured) and the skinned sample (playing its clip)
 //   * Lua scripts: a rotator, a bobber, a spawner and an impulse launcher using `physics.*`
@@ -58,7 +58,17 @@ SliceArgs parse_slice_args(int argc, char** argv) {
     return a;
 }
 
-AssetId material_id(const char* name) { return AssetId::from_string(std::string("slice:material/") + name); }
+// Built-in materials: they resolve without assets and survive --save / the editor.
+AssetId material_id(const char* name) {
+    const std::string n = name;
+    using gameplay::BuiltinMaterial;
+    const BuiltinMaterial m = n == "red"    ? BuiltinMaterial::Red
+                              : n == "blue" ? BuiltinMaterial::Blue
+                              : n == "gold" ? BuiltinMaterial::Gold
+                              : n == "steel" ? BuiltinMaterial::Metal
+                                             : BuiltinMaterial::Default;
+    return gameplay::builtin_material_id(m);
+}
 
 class VerticalSlice final : public Application {
 public:
@@ -73,7 +83,6 @@ protected:
         if (auto* physics = find_subsystem<physics::PhysicsSubsystem>(); physics != nullptr && args_.check) {
             physics->set_debug_draw(physics::DebugDrawFlags::Shapes); // exercise the debug-line path
         }
-        register_materials();
         if (auto built = build_scene(); !built) {
             return built;
         }
@@ -131,34 +140,6 @@ private:
         env.skybox            = sky_;
         env.ambient_intensity = 1.0f;
         bridge->set_environment(env);
-    }
-
-    void register_materials() {
-        auto* bridge = find_subsystem<RenderBridgeSubsystem>();
-        if (bridge == nullptr || bridge->cache() == nullptr) {
-            return;
-        }
-        struct Mat {
-            const char* name;
-            Vec4        color;
-            f32         metallic;
-            f32         roughness;
-        };
-        const Mat mats[] = {
-            { "floor", Vec4(0.55f, 0.57f, 0.6f, 1.0f), 0.0f, 0.85f },
-            { "red", Vec4(0.85f, 0.18f, 0.15f, 1.0f), 0.0f, 0.45f },
-            { "blue", Vec4(0.15f, 0.35f, 0.85f, 1.0f), 0.0f, 0.35f },
-            { "gold", Vec4(1.0f, 0.78f, 0.34f, 1.0f), 1.0f, 0.25f },
-            { "steel", Vec4(0.75f, 0.75f, 0.78f, 1.0f), 1.0f, 0.4f },
-        };
-        for (const Mat& m : mats) {
-            assets::MaterialData d;
-            d.name              = m.name;
-            d.base_color_factor = m.color;
-            d.metallic_factor   = m.metallic;
-            d.roughness_factor  = m.roughness;
-            bridge->cache()->add_material(material_id(m.name), d);
-        }
     }
 
     Entity mesh_entity(const char* name, BuiltinMesh mesh, const char* material, const Vec3& pos,

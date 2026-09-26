@@ -32,6 +32,10 @@ namespace aether::gameplay {
 
 enum class BuiltinMesh : u8 { Cube = 0, Sphere, Plane, Capsule, Count };
 
+// Built-in materials (resolved by RenderResourceCache like built-in meshes). Default is the
+// light-grey rough dielectric returned by make_default_material().
+enum class BuiltinMaterial : u8 { Default = 0, White, Black, Red, Green, Blue, Yellow, Metal, Gold, Emissive, Count };
+
 // Stable ids of the built-in meshes and of the default (light grey, rough dielectric) material.
 [[nodiscard]] AssetId builtin_mesh_id(BuiltinMesh mesh);
 [[nodiscard]] AssetId default_material_id();
@@ -40,5 +44,12 @@ enum class BuiltinMesh : u8 { Cube = 0, Sphere, Plane, Capsule, Count };
 [[nodiscard]] std::optional<BuiltinMesh> builtin_mesh_from_id(const AssetId& id);
 [[nodiscard]] assets::MeshData          make_builtin_mesh(BuiltinMesh mesh);
 [[nodiscard]] assets::MaterialData      make_default_material();
+
+// default_material_id() == builtin_material_id(BuiltinMaterial::Default).
+[[nodiscard]] AssetId                        builtin_material_id(BuiltinMaterial material);
+[[nodiscard]] std::optional<BuiltinMaterial> builtin_material_from_id(const AssetId& id);
+[[nodiscard]] assets::MaterialData           make_builtin_material(BuiltinMaterial material);
+[[nodiscard]] const char*                    builtin_mesh_name(BuiltinMesh mesh);
+[[nodiscard]] const char*                    builtin_material_name(BuiltinMaterial material);
 
 } // namespace aether::gameplay

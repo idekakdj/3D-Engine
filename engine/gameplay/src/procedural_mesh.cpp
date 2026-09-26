@@ -7,6 +7,7 @@
 #include <array>
 #include <cmath>
 #include <limits>
+#include <string>
 
 namespace aether::gameplay {
 
@@ -202,12 +203,82 @@ assets::MeshData make_builtin_mesh(BuiltinMesh mesh) {
     return {};
 }
 
-assets::MaterialData make_default_material() {
+assets::MaterialData make_default_material() { return make_builtin_material(BuiltinMaterial::Default); }
+
+const char* builtin_mesh_name(BuiltinMesh mesh) {
+    switch (mesh) {
+    case BuiltinMesh::Cube: return "Cube";
+    case BuiltinMesh::Sphere: return "Sphere";
+    case BuiltinMesh::Plane: return "Plane";
+    case BuiltinMesh::Capsule: return "Capsule";
+    case BuiltinMesh::Count: break;
+    }
+    return "?";
+}
+
+const char* builtin_material_name(BuiltinMaterial material) {
+    switch (material) {
+    case BuiltinMaterial::Default: return "Default";
+    case BuiltinMaterial::White: return "White";
+    case BuiltinMaterial::Black: return "Black";
+    case BuiltinMaterial::Red: return "Red";
+    case BuiltinMaterial::Green: return "Green";
+    case BuiltinMaterial::Blue: return "Blue";
+    case BuiltinMaterial::Yellow: return "Yellow";
+    case BuiltinMaterial::Metal: return "Metal";
+    case BuiltinMaterial::Gold: return "Gold";
+    case BuiltinMaterial::Emissive: return "Emissive";
+    case BuiltinMaterial::Count: break;
+    }
+    return "?";
+}
+
+AssetId builtin_material_id(BuiltinMaterial material) {
+    if (material == BuiltinMaterial::Default) {
+        return default_material_id();
+    }
+    return AssetId::from_string(std::string("aether:builtin/material/") + builtin_material_name(material));
+}
+
+std::optional<BuiltinMaterial> builtin_material_from_id(const AssetId& id) {
+    for (u8 i = 0; i < static_cast<u8>(BuiltinMaterial::Count); ++i) {
+        const auto m = static_cast<BuiltinMaterial>(i);
+        if (builtin_material_id(m) == id) {
+            return m;
+        }
+    }
+    return std::nullopt;
+}
+
+assets::MaterialData make_builtin_material(BuiltinMaterial material) {
     assets::MaterialData d;
-    d.name              = "Default";
-    d.base_color_factor = Vec4(0.8f, 0.8f, 0.8f, 1.0f);
-    d.metallic_factor   = 0.0f;
-    d.roughness_factor  = 0.6f;
+    d.name             = builtin_material_name(material);
+    d.metallic_factor  = 0.0f;
+    d.roughness_factor = 0.6f;
+    switch (material) {
+    case BuiltinMaterial::Default: d.base_color_factor = Vec4(0.8f, 0.8f, 0.8f, 1.0f); break;
+    case BuiltinMaterial::White: d.base_color_factor = Vec4(0.95f, 0.95f, 0.95f, 1.0f); break;
+    case BuiltinMaterial::Black: d.base_color_factor = Vec4(0.04f, 0.04f, 0.04f, 1.0f); break;
+    case BuiltinMaterial::Red: d.base_color_factor = Vec4(0.85f, 0.18f, 0.15f, 1.0f); d.roughness_factor = 0.45f; break;
+    case BuiltinMaterial::Green: d.base_color_factor = Vec4(0.2f, 0.7f, 0.25f, 1.0f); d.roughness_factor = 0.5f; break;
+    case BuiltinMaterial::Blue: d.base_color_factor = Vec4(0.15f, 0.35f, 0.85f, 1.0f); d.roughness_factor = 0.35f; break;
+    case BuiltinMaterial::Yellow: d.base_color_factor = Vec4(0.95f, 0.8f, 0.2f, 1.0f); d.roughness_factor = 0.5f; break;
+    case BuiltinMaterial::Metal:
+        d.base_color_factor = Vec4(0.75f, 0.75f, 0.78f, 1.0f);
+        d.metallic_factor   = 1.0f;
+        d.roughness_factor  = 0.3f;
+        break;
+    case BuiltinMaterial::Gold:
+        d.base_color_factor = Vec4(1.0f, 0.78f, 0.34f, 1.0f);
+        d.metallic_factor   = 1.0f;
+        d.roughness_factor  = 0.25f;
+        break;
+    case BuiltinMaterial::Emissive:
+        d.base_color_factor = Vec4(1.0f, 0.6f, 0.3f, 1.0f);
+        d.emissive_factor   = Vec3(4.0f, 2.4f, 1.2f);
+        break;
+    case BuiltinMaterial::Count: break;
+    }
     return d;
 }
 
