@@ -4,7 +4,7 @@
 > across rendering fidelity, editor/tooling, physics/animation, and scripting/gameplay.
 >
 > **Status:** Foundation phase (multi-session project). **Author:** Engine architect (orchestrator).
-> **Doc version:** 1.3 (ADR-0003 applied). Update this header on every material revision.
+> **Doc version:** 1.4 (ADR-0004 applied). Update this header on every material revision.
 
 ---
 
@@ -534,6 +534,7 @@ until it builds and its acceptance check passes.
 - **v1.1** — Applied Fable 5 review (ADR-0001 below). All items below are **authoritative amendments**; where they conflict with §1–§16, the amendment wins.
 - **v1.2** — ADR-0002: Opus 5.5 orchestration, isolated per-agent build trees, expanded frozen contracts, UNORM swapchain.
 - **v1.3** — ADR-0003: gameplay becomes the engine assembly layer (4b); `Application` contract frozen for Wave B.
+- **v1.4** — ADR-0004: Wave A closed (scripting, animation tests), gameplay implemented, M1 vertical slice, Linux/llvmpipe headless verification path.
 
 ---
 
@@ -677,3 +678,46 @@ This mirrors Unreal's `Engine` module sitting above its feature modules.
 can work in parallel in Wave B. Play-in-editor = snapshot the world (scene serializer) → enable
 simulation → on stop, `reload_world()` from the snapshot (it shuts down and restarts the Simulation
 subsystems around the reload, so per-world state such as physics bodies and script instances is rebuilt).
+
+---
+
+## ADR-0004 — Wave A close-out, gameplay, M1 vertical slice, headless verification (2026-09-26)
+
+**State at session start.** Wave A modules existed except that `scripting` had no CMakeLists, bindings,
+subsystem, codec or tests, and `animation/CMakeLists.txt` listed four missing test files (any tree
+with tests enabled failed to configure). `gameplay` was headers plus one-line stubs; no editor.
+
+**Done**
+- **scripting** completed: `aether.scripting` + `aether::scripting_lua` (opt-in sol2 target),
+  engine bindings (math, Entity/Light/Camera, `world`, `input`, `time`, `timer`), "Script" codec,
+  `ScriptingSubsystem`, 34 tests (clean under ASan/UBSan), `content/scripts/README.md` API reference.
+- **animation** test suite completed (37 cases).
+- **gameplay** implemented against the frozen `application.h`. New ADDITIVE public headers (the
+  editor needs them): `render_bridge.h`, `scene_instantiation.h`, `component_codecs.h`,
+  `components.h` (`MaterialOverridesComponent`), `procedural_mesh.h` (built-in asset ids),
+  `animation_bridge.h`, `asset_hot_reload.h`, `environment.h` (procedural HDR sky), `debug_ui.h`.
+  Physics / animation / scripting types stay out of gameplay's public headers (hooks instead).
+- **samples/vertical_slice** — the M1 artifact; `--check` gates the exit code on physics, scripts,
+  animation and rendering actually working.
+
+**Decisions**
+1. **Linux is a verification platform now.** The RHI creates its surface through GLFW on non-Windows
+   (Win32 path unchanged). On Linux with Xvfb + Mesa llvmpipe (Vulkan 1.4) + `vulkan-validationlayers`
+   every test suite runs, and `sandbox` / `vertical_slice --check` run validation-clean. This is the
+   GPU-less CI path ADR-0001 deferred. Recipe: `apt install libxrandr-dev libxinerama-dev
+   libxcursor-dev libxi-dev libgl-dev mesa-vulkan-drivers vulkan-validationlayers xvfb`, configure with
+   `-DGLFW_BUILD_WAYLAND=OFF`, run under `Xvfb :99` with `DISPLAY=:99`.
+2. **llvmpipe shadow workaround.** Mesa llvmpipe 25.x crashes in its JIT when fragment shaders sample
+   the cascaded shadow map (null sample-function table; every sampling form tried fails). `Application`
+   disables shadows only when the adapter is a software rasterizer, with a warning. Shadows still need a
+   real-GPU check on the Arc box — the renderer's shadow path has never been exercised on hardware.
+3. **Jolt is built with RTTI** (`CPP_RTTI_ENABLED`): GCC/Clang need Jolt typeinfo because
+   `aether.physics` derives from Jolt classes. No behavioural change on MSVC.
+4. **Cooked asset cache** (`<engine root>/assets/`) is git-ignored.
+
+**Not verified this session:** MSVC build (all new code was compiled with GCC 13 at -Wall -Wextra
+-Wpedantic -Wshadow -Wconversion, warning-free) and real-GPU rendering.
+
+**Next (Wave B remainder):** `editor/` (ImGui docking editor: viewport via `set_render_extent` +
+`on_render_frame` override, hierarchy, inspector, gizmos, play-in-editor via `reload_world`), the
+`runtime/` player, golden-image tests using the headless path, and a real-GPU shadow check.
