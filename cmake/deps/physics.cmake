@@ -17,6 +17,9 @@ set(USE_STATIC_MSVC_RUNTIME_LIBRARY   OFF CACHE BOOL "" FORCE)
 set(OVERRIDE_CXX_FLAGS                OFF CACHE BOOL "" FORCE)
 set(INTERPROCEDURAL_OPTIMIZATION      OFF CACHE BOOL "" FORCE)
 set(FLOATING_POINT_EXCEPTIONS_ENABLED OFF CACHE BOOL "" FORCE)
+# aether.physics derives from Jolt classes (EngineJobSystemAdapter : JobSystemWithBarrier) and is
+# compiled with RTTI, so GCC/Clang need Jolt's typeinfo symbols (MSVC emits them per TU anyway).
+set(CPP_RTTI_ENABLED                  ON  CACHE BOOL "" FORCE)
 
 # ADR-0001 float policy: simulation code never builds with /fp:fast. Without this option Jolt's
 # MSVC flags use /fp:fast; with it Jolt builds /fp:precise and defines
