@@ -1,0 +1,6 @@
+{
+  "product": "Aether",
+  "version": "@PROJECT_VERSION@",
+  "layout": "installed",
+  "note": "Marks an installed Aether. The editor and player keep user data in Documents/Aether Projects (ADR-0013)."
+}

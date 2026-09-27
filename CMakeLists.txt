@@ -86,7 +86,8 @@ foreach(m IN LISTS AE_ENGINE_MODULES)
     endif()
 endforeach()
 
-foreach(app IN ITEMS editor runtime samples)
+# runtime before editor: the editor opens .aeproject workspaces through aether.runtime (ADR-0013).
+foreach(app IN ITEMS runtime editor samples)
     ae_module_enabled(${app} "${app}" _enabled)
     if(_enabled)
         add_subdirectory("${app}")
@@ -100,5 +101,8 @@ if(_enabled)
     add_subdirectory("tests/golden")
     message(STATUS "Aether: + tests/golden")
 endif()
+
+# Install rules + CPack packages (ADR-0013).
+include(Packaging)
 
 message(STATUS "Aether ${PROJECT_VERSION} configured (build type: ${CMAKE_BUILD_TYPE}, modules: ${AE_MODULES})")

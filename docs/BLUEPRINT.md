@@ -4,7 +4,7 @@
 > across rendering fidelity, editor/tooling, physics/animation, and scripting/gameplay.
 >
 > **Status:** Foundation phase (multi-session project). **Author:** Engine architect (orchestrator).
-> **Doc version:** 1.12 (ADR-0012 applied). Update this header on every material revision.
+> **Doc version:** 1.13 (ADR-0013 applied). Update this header on every material revision.
 
 ---
 
@@ -551,6 +551,7 @@ until it builds and its acceptance check passes.
 - **v1.10** — ADR-0010: M2 wave verified on Linux; meshlet mesh-shader path (ADR-0009 graphics stretch 1).
 - **v1.11** — ADR-0011: asset-browser thumbnails (ADR-0009 editor stretch); toolbar / layout fixes.
 - **v1.12** — ADR-0012: spot-light shadows (ADR-0009 graphics stretch 2); delivery as a downloadable local app made explicit.
+- **v1.13** — ADR-0013: installable build — install rules, CPack ZIP + Inno Setup installer, Documents workspace.
 
 ---
 
@@ -1095,3 +1096,53 @@ passed on a database left by previous sessions). `Application` now enables
 imports new / changed sources before the startup scene loads. Fresh database: 6 sources imported,
 `aether-player --check` passes; second run: 6 up to date. Cooked (shipping) mode is unchanged.
 
+---
+
+## ADR-0013 — The downloadable application: packaging and the user workspace (2026-09-27)
+
+**Status:** accepted; verified on Linux (packaged build); Windows installer run pending. Implements
+the "Delivery" requirement of §1.1 (ADR-0012).
+
+**Decisions**
+1. **Install layout** (`cmake/Packaging.cmake`, component `Aether`): `bin/aether-editor`,
+   `bin/aether-player` (+ the MSVC runtime DLLs via `InstallRequiredSystemLibraries`, app-local; the
+   UCRT ships with Windows 10/11), `shaders/`, `content/` (starter content, authoring scripts
+   excluded), `licenses/<component>/` (the actual license texts of the 18 bundled libraries, taken
+   from the fetched sources), `THIRD_PARTY_NOTICES.md`, `README.md` and the install marker
+   `aether-install.json`. The engine root resolves as the executable's ancestor holding `shaders/`
+   (ADR-0001 paths), so an installed copy never uses the developer's source tree. Third-party install
+   rules (their headers / static libs) are in other components and never packaged.
+2. **Packages** (CPack): a portable ZIP (with a top-level `Aether-<version>-<os>/` folder) always;
+   on Windows with Inno Setup 6 (CMake >= 3.27 generator) also a setup `.exe`: per-user install
+   without admin rights (all-users optional in a dialog), Start menu + desktop shortcuts to the editor,
+   uninstaller, "launch Aether Editor" on the last page, a stable AppId for upgrades. No license page:
+   the project has no LICENSE of its own yet (owner's choice). `scripts/package.ps1` builds Release,
+   packages into `dist/` and, with `-SmokeTest`, tests the unzipped package.
+3. **User workspace** (`runtime/workspace.h`): an installed engine (marker present, or read-only
+   `content/`) must not write into its folder, so without `--project` the editor and the player open
+   `Documents/Aether Projects/Starter Project/Starter Project.aeproject`, created on first run by
+   copying the installed starter content (never overwritten afterwards, so user edits survive
+   upgrades). Documents = Windows' Documents known folder (follows OneDrive redirection), else
+   `$XDG_DOCUMENTS_DIR` / `~/Documents`; `AETHER_DOCUMENTS_DIR` overrides it (tests, portable use).
+   The editor gained `--project <file.aeproject>` (content + cooked roots, startup scene, window title),
+   linking `aether.runtime`, so `runtime` now configures before `editor`. Development checkouts
+   (no marker, writable content) behave exactly as before.
+4. **Release defaults:** the editor, like the player, requests Vulkan validation only in debug builds
+   (end users have no SDK layers; a missing layer was already only a warning).
+
+**Verification (Linux).** Release build -> `cpack` -> 10.5 MB archive containing only the Aether
+component. Unpacked to a fresh folder with an empty temporary Documents: engine root = the package
+folder ("executable ancestor"), starter project created, validation off, the installed
+`aether-editor --self-test` PASSED (6 sources imported into the project), the installed
+`aether-player --check` PASSED (6 sources up to date), SHA-1 of every file in the package folder
+unchanged afterwards, and the player still passes with the repository's `shaders/` hidden (no
+source-tree dependency). `test.runtime` +4 cases (marker, writability probe, Documents override,
+starter project created once and never overwritten, dev vs installed). Debug tree: ctest 26/26.
+
+**Pending (Windows):** first run of `scripts/package.ps1 -SmokeTest` (PowerShell could not be run
+here), installing `AetherSetup` and checking the Start menu / desktop shortcuts and the uninstaller.
+
+**Not done yet:** offline shader precompilation (shaders still compile at startup; the pipeline cache
+makes later starts fast), an application icon and version resource, code signing (unsigned installers
+trigger SmartScreen warnings), File > New / Open Project in the editor UI, and a macOS / Linux
+installer.

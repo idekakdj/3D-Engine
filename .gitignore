@@ -40,3 +40,6 @@ compile_commands.json
 
 # Cooked asset cache (paths::asset_dir(): <engine root>/assets, written by AssetManager / the cooker)
 /assets/
+
+# Packaged builds (scripts/package.ps1, ADR-0013)
+/dist/

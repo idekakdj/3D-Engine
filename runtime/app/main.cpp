@@ -5,7 +5,8 @@
 //                 --no-validation, --no-vsync, --width W, --height H, --title T]
 //
 // Without a project argument the player runs the *.aeproject next to its executable, else the
-// one in the engine root (the repository's game.aeproject during development).
+// one in the engine root (the repository's game.aeproject during development). An installed engine
+// (install marker, ADR-0013) plays the Documents starter project instead.
 //   --check          verify the run on exit (see player.h); exit code 1 on failure
 //   --cooked         load cooked assets only (AssetLoadMode::Runtime), as a shipped build does
 //   --source-assets  import/cook from the content sources on demand (development)
@@ -19,6 +20,7 @@
 #include "aether/gameplay/application.h"
 #include "aether/runtime/player.h"
 #include "aether/runtime/project.h"
+#include "aether/runtime/workspace.h"
 
 #include <cstdio>
 #include <cstring>
@@ -111,6 +113,14 @@ int main(int argc, char** argv) {
     fs::path project_file = args.project;
     if (project_file.empty()) {
         project_file = runtime::find_default_project(paths::executable_dir(), paths::engine_root());
+    }
+    if (project_file.empty() || (runtime::is_installed_layout(paths::engine_root()) && args.project.empty())) {
+        // Installed engine (ADR-0013): play the user's starter project from Documents, never the
+        // read-only install folder.
+        auto def = runtime::default_user_project(paths::engine_root());
+        if (def && !def->empty()) {
+            project_file = *def;
+        }
     }
     if (project_file.empty()) {
         std::fprintf(stderr, "aether-player: no project given and no *%s found next to the player or in %s\n",

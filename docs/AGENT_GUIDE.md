@@ -11,7 +11,7 @@ integration; work that violates them is sent back.
 
 | Owner | May create/modify |
 |---|---|
-| Orchestrator | root `CMakeLists.txt`, `CMakePresets.json`, `cmake/*.cmake`, `scripts/build.ps1`, `scripts/run.ps1`, `docs/BLUEPRINT.md`, `docs/AGENT_GUIDE.md`, `shaders/common/**` (frozen) |
+| Orchestrator | root `CMakeLists.txt`, `CMakePresets.json`, `cmake/*.cmake`, `scripts/build.ps1`, `scripts/run.ps1`, `scripts/package.ps1`, `cmake/packaging/**`, `docs/BLUEPRINT.md`, `docs/AGENT_GUIDE.md`, `shaders/common/**` (frozen) |
 | core-rhi agent | `engine/core/**`, `engine/rhi/**`, `samples/CMakeLists.txt`, `samples/sandbox/**`, `shaders/sandbox/**`, `cmake/deps/rhi.cmake` |
 | scene agent | `engine/scene/**`, `cmake/deps/scene.cmake`, `cmake/deps/json.cmake` |
 | assets agent | `engine/assets/**`, `cmake/deps/assets.cmake`, `content/samples/**` |

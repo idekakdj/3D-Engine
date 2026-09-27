@@ -3,8 +3,9 @@
 #                   the GPU-free pieces unit-tested in tests/ (edit history, picking + the GPU pick
 #                   fallback tracker, selection, snapping, prefabs, material instances, anim view).
 #   aether-editor   the executable (app/main.cpp).
-if(NOT (TARGET aether.gameplay AND TARGET aether.physics AND TARGET aether.scripting AND TARGET aether.animation))
-    message(STATUS "Aether: editor skipped (needs gameplay, physics, scripting and animation)")
+if(NOT (TARGET aether.gameplay AND TARGET aether.physics AND TARGET aether.scripting AND TARGET aether.animation
+        AND TARGET aether.runtime))
+    message(STATUS "Aether: editor skipped (needs gameplay, physics, scripting, animation and runtime)")
     return()
 endif()
 
@@ -45,7 +46,7 @@ aether_add_module(editor
         aether_stb) # thumbnail image decoding (stb_image's implementation is in aether.assets)
 
 add_executable(aether-editor app/main.cpp)
-target_link_libraries(aether-editor PRIVATE aether::editor)
+target_link_libraries(aether-editor PRIVATE aether::editor aether::runtime) # projects / workspace (ADR-0013)
 target_include_directories(aether-editor PRIVATE src)
 ae_set_target_warnings(aether-editor)
 if(MSVC)

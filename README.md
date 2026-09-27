@@ -29,6 +29,24 @@ relocatable game builds.
 | `content/` | sample models, scripts and scenes |
 | `tests/golden` | golden-image render tests (`aether-golden`) and their reference images |
 
+## Installing (no compiler needed)
+
+Aether is distributed as a normal desktop application:
+
+- **AetherSetup** (`Aether-<version>-windows-x64.exe`): installs for the current user (no admin
+  rights), adds *Aether Editor* to the Start menu and the desktop, and registers an uninstaller.
+- **Portable ZIP** (`Aether-<version>-windows-x64.zip`): unzip anywhere and run `bin\aether-editor.exe`.
+
+Requirements: Windows 10/11 x64 and a GPU driver with Vulkan 1.3 (current Intel, AMD and NVIDIA
+drivers). On first launch the editor creates your workspace in
+`Documents\Aether Projects\Starter Project` (starter content + your saved scenes and imported
+assets); the install folder is never written to. `aether-editor --project <file.aeproject>` opens
+another project. Nothing runs online.
+
+Making the packages (developers): `powershell -ExecutionPolicy Bypass -File scripts/package.ps1 -SmokeTest`
+builds Release, writes the ZIP (and the setup `.exe` when Inno Setup 6 is installed:
+`winget install JRSoftware.InnoSetup`) to `dist/`, then tests the packaged build.
+
 ## Building
 
 Windows (the primary platform; MSVC 2022 Build Tools, see `scripts/build.ps1`):

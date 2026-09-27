@@ -1,13 +1,20 @@
 // aether-editor — entry point.
 //
-// Usage: aether-editor [--scene <file.aescene>] [--select <entity name>] [--browse <content dir>]
-//                      [--self-test] [shared app flags]
+// Usage: aether-editor [--project <file.aeproject>] [--scene <file.aescene>] [--select <entity name>]
+//                      [--browse <content dir>] [--self-test] [shared app flags]
+//   --project    open a project (content + cooked folders, startup scene) instead of the engine's
+//                content folder. An INSTALLED editor without --project opens (creating it on first
+//                run) "Documents/Aether Projects/Starter Project" (ADR-0013).
 //   --browse     open the asset browser in this content-relative folder (e.g. samples/props)
 //   --self-test  run the scripted editor workflow (self_test.cpp) and exit with its result.
 #include "aether/core/log.h"
+#include "aether/core/paths.h"
+#include "aether/runtime/project.h"
+#include "aether/runtime/workspace.h"
 #include "editor_app.h"
 
 #include <cstring>
+#include <filesystem>
 
 int main(int argc, char** argv) {
     using namespace aether;
@@ -15,6 +22,37 @@ int main(int argc, char** argv) {
     defaults.window.title  = "Aether Editor";
     defaults.window.width  = 1600;
     defaults.window.height = 900;
+#ifdef NDEBUG
+    defaults.enable_validation = false; // release / installed builds: no Vulkan SDK layers needed
+#endif
+
+    // ---- project: --project, else the installed default (Documents), else the engine content ----
+    std::filesystem::path project_file;
+    for (int i = 1; i + 1 < argc; ++i) {
+        if (std::strcmp(argv[i], "--project") == 0) {
+            project_file = argv[i + 1];
+        }
+    }
+    if (project_file.empty()) {
+        auto def = runtime::default_user_project(paths::engine_root());
+        if (!def) {
+            AE_LOG_ERROR("Editor", "cannot prepare the user project: {}", def.error().message);
+            return 1;
+        }
+        project_file = *def;
+    }
+    if (!project_file.empty()) {
+        auto project = runtime::load_project(project_file);
+        if (!project) {
+            AE_LOG_ERROR("Editor", "{}", project.error().message);
+            return 1;
+        }
+        defaults.content_root  = project->content_root;
+        defaults.cooked_root   = project->cooked_root;
+        defaults.startup_scene = project->startup_scene;
+        defaults.window.title  = "Aether Editor - " + project->name;
+        AE_LOG_INFO("Editor", "project '{}' ({})", project->name, project_file.generic_string());
+    }
     const gameplay::AppDesc desc = gameplay::parse_command_line(argc, argv, defaults);
 
     editor::EditorOptions options;

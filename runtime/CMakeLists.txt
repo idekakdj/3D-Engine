@@ -11,6 +11,7 @@ aether_add_module(runtime
     SOURCES
         src/project.cpp
         src/player.cpp
+        src/workspace.cpp
     PUBLIC_DEPS
         aether::core
         aether::gameplay
@@ -22,6 +23,10 @@ aether_add_module(runtime
         glfw
         nlohmann_json::nlohmann_json)
 
+if(WIN32)
+    target_link_libraries(aether.runtime PRIVATE shell32 ole32) # SHGetKnownFolderPath (workspace.cpp)
+endif()
+
 add_executable(aether-player app/main.cpp)
 target_link_libraries(aether-player PRIVATE aether::runtime)
 ae_set_target_warnings(aether-player)
@@ -31,7 +36,8 @@ endif()
 set_target_properties(aether-player PROPERTIES FOLDER "apps")
 
 aether_add_test(runtime
-    tests/test_project.cpp)
+    tests/test_project.cpp
+    tests/test_workspace.cpp)
 if(TARGET test.runtime)
     target_link_libraries(test.runtime PRIVATE aether::assets)
     target_compile_definitions(test.runtime PRIVATE
