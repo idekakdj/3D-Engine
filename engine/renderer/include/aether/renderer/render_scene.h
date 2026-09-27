@@ -58,6 +58,9 @@ struct RenderMeshInstance {
     u32            flags = 0;         // bit 0 = casts shadow, bit 1 = skinned, ...
     u32            first_joint = kInvalidU32;
     u32            joint_count = 0;
+    // ADR-0009 (additive): caller-defined id written to the picking buffer; 0 = not pickable.
+    // The gameplay bridge stores (entity index + 1).
+    u32            user_id = 0;
 };
 
 // Debug line (1px on Intel Arc — no wideLines; see ADR-0001). Physics/anim emit these.

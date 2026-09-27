@@ -46,8 +46,10 @@ struct PipelineSpec {
 };
 
 // ---- mesh pipelines (indexed by pass + permutation) ----
-enum class MeshPass : u8 { Depth, Shadow, Forward, Translucent, Overdraw };
-inline constexpr u32 kMeshPipelineCount = 26;
+// Pick (ADR-0009): R32Uint id buffer over the finished depth prepass (Equal test, no writes).
+enum class MeshPass : u8 { Depth, Shadow, Forward, Translucent, Overdraw, Pick };
+inline constexpr u32 kMeshPipelineCount = 30;
+inline constexpr rhi::Format kPickIdFormat = rhi::Format::R32Uint;
 [[nodiscard]] u32 mesh_pipeline_index(MeshPass pass, bool skinned, bool masked, bool double_sided);
 
 // ---- fixed pipelines (follow the mesh pipelines in the table) ----
@@ -63,6 +65,9 @@ enum class PipelineId : u32 {
     Irradiance,
     Prefilter,
     BrdfLut,
+    GpuCull,     // ADR-0009: GPU-driven instance culling (frustum / two-phase occlusion)
+    HiZBuild,    // ADR-0009: reverse-Z min depth pyramid
+    PickResolve, // ADR-0009: id buffer texel -> counter buffer
     Tonemap,    // per target format
     DebugLines, // per target format
     Count

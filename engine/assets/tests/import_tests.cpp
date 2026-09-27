@@ -1,4 +1,5 @@
 // import_tests.cpp — glTF / image importers against the sample content + synthetic files.
+#include "aether/assets/format.h"
 #include "aether/assets/importers.h"
 
 #include "test_helpers.h"
@@ -445,4 +446,114 @@ TEST_CASE("import: errors are reported, never thrown") {
     CHECK(is_supported_source("a/B.GLTF"));
     CHECK(is_supported_source("x.HDR"));
     CHECK_FALSE(is_supported_source("x.bin"));
+}
+
+TEST_CASE("import: animation of non-joint nodes becomes a node clip over the scene") {
+    TempDir         dir("node_anim");
+    std::vector<u8> buf;
+    const usize     times = append_f32(buf, { 0.0f, 2.0f });
+    const usize     rot = append_f32(buf, { 0, 0, 0, 1, 0, 0.70710678f, 0, 0.70710678f });
+    const usize     tr = append_f32(buf, { 0, 0, 0, 0, 3, 0 });
+    const std::string body = std::format(
+        R"("bufferViews":[{{"buffer":0,"byteOffset":{},"byteLength":8}},{{"buffer":0,"byteOffset":{},"byteLength":32}},{{"buffer":0,"byteOffset":{},"byteLength":24}}],
+"accessors":[{{"bufferView":0,"componentType":5126,"count":2,"type":"SCALAR","min":[0],"max":[2]}},{{"bufferView":1,"componentType":5126,"count":2,"type":"VEC4"}},{{"bufferView":2,"componentType":5126,"count":2,"type":"VEC3"}}],
+"nodes":[{{"name":"Root","children":[1,2]}},{{"name":"Lamp","translation":[0,2,0]}},{{"name":"Spinner","translation":[1,0,0],"children":[3]}},{{"name":"Blade"}},{{"name":"Orphan"}}],
+"scenes":[{{"nodes":[0]}}],"scene":0,
+"animations":[{{"name":"Spin","samplers":[{{"input":0,"output":1}},{{"input":0,"output":2,"interpolation":"STEP"}},{{"input":0,"output":2}}],
+"channels":[{{"sampler":0,"target":{{"node":2,"path":"rotation"}}}},{{"sampler":1,"target":{{"node":1,"path":"translation"}}}},{{"sampler":2,"target":{{"node":4,"path":"translation"}}}}]}}])",
+        times, rot, tr);
+    write_text(dir / "props.gltf", make_gltf(buf, body));
+    ImportSettings settings;
+    settings.content_root = dir.path();
+    auto r = import_gltf(dir / "props.gltf", settings);
+    REQUIRE_MESSAGE(r.has_value(), r.error().message);
+
+    // Scene order: Root(0) Lamp(1) Spinner(2) Blade(3); "Orphan" is not in the default scene.
+    const SceneData& scene = r->scenes[0].data;
+    REQUIRE(scene.nodes.size() == 4);
+    CHECK(scene.nodes[2].name == "Spinner");
+
+    REQUIRE(r->animations.size() == 1);
+    const auto& clip = r->animations[0];
+    CHECK(clip.key == "node_anim:0");
+    CHECK(clip.id == make_asset_id("props.gltf", "node_anim:0"));
+    CHECK(clip.data.duration == doctest::Approx(2.0f));
+    REQUIRE(clip.data.channels.size() == 2); // Orphan's channel dropped (outside the scene)
+    CHECK(clip.data.channels[0].joint == 2);
+    CHECK(clip.data.channels[0].path == AnimPath::Rotation);
+    CHECK(clip.data.channels[1].joint == 1);
+    CHECK(clip.data.channels[1].interpolation == Interpolation::Step);
+    bool warned = false;
+    for (const String& w : r->warnings) warned |= w.find("outside the default scene") != String::npos;
+    CHECK(warned);
+
+    // The node skeleton mirrors the scene: joint i == scene node i.
+    const SkeletonData& skel = only_skeleton(*r).data;
+    CHECK(clip.data.skeleton == r->skeletons[0].id);
+    CHECK(r->skeletons[0].key == "node_skeleton:0");
+    REQUIRE(skel.joint_names.size() == scene.nodes.size());
+    for (usize i = 0; i < scene.nodes.size(); ++i) {
+        CHECK(skel.joint_names[i] == scene.nodes[i].name);
+        CHECK(skel.parents[i] == scene.nodes[i].parent);
+    }
+    CHECK(near(skel.bind_local[2].position, { 1, 0, 0 }));
+    CHECK(near(Vec3(skel.inverse_bind[3][3]), { -1, 0, 0 })); // Blade sits at the Spinner's origin
+
+    // Round trip through the cooked format (skeleton validation: parents precede children).
+    CHECK(encode_asset(CookedMeta{ clip.id, 0, kImporterVersion }, clip.data).has_value());
+    CHECK(encode_asset(CookedMeta{ r->skeletons[0].id, 0, kImporterVersion }, skel).has_value());
+}
+
+TEST_CASE("import: cooked glTF textures (roles -> BC7 sRGB / BC7 linear / BC5, full mips)") {
+    TempDir               dir("cooked_textures");
+    const std::vector<u8> px(8 * 8 * 4, u8{ 128 });
+    write_png(dir / "a.png", 8, 8, px);
+    write_png(dir / "b.png", 8, 8, px);
+    write_png(dir / "c.png", 8, 8, px);
+    write_text(dir / "m.gltf", R"({"asset":{"version":"2.0"},
+"images":[{"uri":"a.png"},{"uri":"b.png"},{"uri":"c.png"}],
+"textures":[{"source":0},{"source":1},{"source":2}],
+"materials":[{"pbrMetallicRoughness":{"baseColorTexture":{"index":0},"metallicRoughnessTexture":{"index":1}},
+"normalTexture":{"index":2}}]})");
+    ImportSettings settings = ImportSettings::cooking(); // no content_root: no de-duplication
+    auto           r = import_gltf(dir / "m.gltf", settings);
+    REQUIRE_MESSAGE(r.has_value(), r.error().message);
+    REQUIRE(r->textures.size() == 3);
+    CHECK(r->referenced_sources.empty());
+    auto find_key = [&](const char* key) -> const TextureData* {
+        for (const auto& t : r->textures) {
+            if (t.key == key) return &t.data;
+        }
+        return nullptr;
+    };
+    const TextureData* base = find_key("texture:0:srgb");
+    const TextureData* mr = find_key("texture:1:linear");
+    const TextureData* nrm = find_key("texture:2:normal");
+    REQUIRE(base);
+    REQUIRE(mr);
+    REQUIRE(nrm);
+    CHECK(base->format == TextureFormat::BC7_SRGB);
+    CHECK(mr->format == TextureFormat::BC7_UNORM);
+    CHECK(nrm->format == TextureFormat::BC5_UNORM);
+    for (const TextureData* t : { base, mr, nrm }) {
+        CHECK(t->mip_levels == 4);
+        CHECK(t->pixels.size() == texture_byte_size(*t));
+    }
+    CHECK(r->materials[0].data.normal_texture == make_asset_id("m.gltf", "texture:2:normal"));
+
+    // Standalone images follow their name: *_normal -> BC5, else BC7 sRGB.
+    write_png(dir / "rock_normal.png", 8, 8, px);
+    CHECK(standalone_image_role(dir / "rock_normal.png", settings) == TextureRole::NormalMap);
+    CHECK(standalone_image_role(dir / "a.png", settings) == TextureRole::Color);
+    CHECK(standalone_image_role(dir / "wood_roughness.png", settings) == TextureRole::Data);
+    CHECK(import_image(dir / "rock_normal.png", settings)->format == TextureFormat::BC5_UNORM);
+    CHECK(import_image(dir / "a.png", settings)->format == TextureFormat::BC7_SRGB);
+    ImportSettings mips_only;
+    mips_only.generate_mips = true;
+    auto plain = import_image(dir / "a.png", mips_only);
+    REQUIRE(plain.has_value());
+    CHECK(plain->format == TextureFormat::RGBA8_SRGB);
+    CHECK(plain->mip_levels == 4);
+    CHECK(settings.fingerprint() != ImportSettings{}.fingerprint());
+    CHECK(mips_only.fingerprint() != ImportSettings{}.fingerprint());
 }

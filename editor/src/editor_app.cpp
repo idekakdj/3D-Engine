@@ -6,6 +6,8 @@
 #include "aether/core/log.h"
 #include "aether/core/paths.h"
 #include "aether/editor/console.h"
+#include "aether/editor/material_instance.h"
+#include "aether/editor/prefab.h"
 #include "aether/gameplay/debug_ui.h"
 #include "aether/gameplay/render_bridge.h"
 #include "aether/gameplay/scene_instantiation.h"
@@ -63,6 +65,8 @@ EditorApp::~EditorApp() = default;
 Result<void> EditorApp::on_init() {
     install_console_sink();
     set_simulation_enabled(false); // edit mode: physics / scripts / animation are paused
+    register_editor_codecs(world());
+    pick_tracker_.set_timeout_frames(device().frames_in_flight() + 2);
 
     rhi::SamplerDesc sd;
     sd.address_u = sd.address_v = sd.address_w = rhi::AddressMode::ClampToEdge;
@@ -72,7 +76,11 @@ Result<void> EditorApp::on_init() {
         new_scene();
     } else {
         scene_path_ = desc().startup_scene.is_absolute() ? desc().startup_scene : content_root() / desc().startup_scene;
-        history_.mark_clean(world());
+        // The Application loaded the startup scene before the editor codecs existed: reload it so
+        // prefab links and material instances are not dropped.
+        if (!open_scene(scene_path_)) {
+            history_.mark_clean(world());
+        }
     }
     set_editor_camera(Vec3(6.0f, 5.0f, 10.0f), Vec3(0.0f, 0.5f, 0.0f));
     if (!options_.select.empty()) {
@@ -109,15 +117,24 @@ void EditorApp::on_update(const FrameTime& time) {
     update_editor_camera(std::min(time.unscaled_delta, 0.1f));
     apply_camera_override();
     retire_viewport_targets(false);
+    poll_gpu_pick();
+    sync_materials();
 }
 
 void EditorApp::on_imgui() {
+    ImGui::GetIO().ConfigWindowsMoveFromTitleBarOnly = true; // viewport drags box-select, not move
     ImGuizmo::BeginFrame();
     draw_menu_bar();
     draw_dockspace();
     draw_toolbar();
     draw_hierarchy();
     draw_inspector();
+    if (show_material_) {
+        draw_material_editor();
+    }
+    if (show_animation_) {
+        draw_animation_panel();
+    }
     if (show_assets_) {
         draw_assets();
     }
@@ -132,14 +149,44 @@ void EditorApp::on_imgui() {
     handle_shortcuts();
 
     // Deferred structural edits (never mutate the hierarchy while the tree is being drawn).
-    for (const auto& [child, parent] : pending_reparent_) {
-        reparent(scene::find_by_uuid(world(), child), parent != 0 ? scene::find_by_uuid(world(), parent) : kNullEntity);
+    if (!pending_reparent_.empty()) {
+        bool any = false;
+        for (const auto& [child, parent] : pending_reparent_) {
+            const Entity c = scene::find_by_uuid(world(), child);
+            const Entity p = parent != 0 ? scene::find_by_uuid(world(), parent) : kNullEntity;
+            if (c == kNullEntity || (parent != 0 && p == kNullEntity)) {
+                continue;
+            }
+            if (scene::set_parent_keep_world(world(), c, p)) {
+                any = true;
+            } else {
+                AE_LOG_WARN("Editor", "cannot parent an entity to itself or its descendant");
+            }
+        }
+        pending_reparent_.clear();
+        if (any) {
+            world().update_transforms();
+            record_edit("Reparent");
+        }
     }
-    pending_reparent_.clear();
-    for (const u64 uuid : pending_delete_) {
-        delete_entity(scene::find_by_uuid(world(), uuid));
+    if (pending_delete_selection_) {
+        pending_delete_selection_ = false;
+        delete_selection();
     }
-    pending_delete_.clear();
+    for (const auto& [path, parent] : pending_asset_drops_) {
+        const Entity p = parent != 0 ? scene::find_by_uuid(world(), parent) : kNullEntity;
+        if (parent == 0 || p != kNullEntity) {
+            drop_asset_on_entity(path, p);
+        }
+    }
+    pending_asset_drops_.clear();
+    for (const auto& [uuid, apply] : pending_prefab_ops_) {
+        const Entity e = scene::find_by_uuid(world(), uuid);
+        if (e != kNullEntity) {
+            apply ? apply_prefab(e) : revert_prefab(e);
+        }
+    }
+    pending_prefab_ops_.clear();
 }
 
 void EditorApp::on_render_frame(rhi::FrameInfo& frame, renderer::RenderScene& scene) {
@@ -290,18 +337,51 @@ void EditorApp::focus(Entity e) {
 // =================================================================================================
 // selection & history
 // =================================================================================================
-void EditorApp::select(Entity e) {
-    selected_uuid_ = world().valid(e) ? scene::uuid_of(world(), e) : 0;
+void EditorApp::select(Entity e) { select_click(e, SelectMode::Replace); }
+
+void EditorApp::select_click(Entity e, SelectMode mode) {
+    const u64 uuid = world().valid(e) ? scene::uuid_of(world(), e) : 0;
+    selection_.apply_click(uuid, mode);
     if (world().valid(e)) {
         rename_buffer_ = world().get<NameComponent>(e).name;
     }
 }
 
-Entity EditorApp::selected() { return selected_uuid_ != 0 ? scene::find_by_uuid(world(), selected_uuid_) : kNullEntity; }
+void EditorApp::select_entities(std::span<const Entity> entities) {
+    std::vector<u64> uuids;
+    for (const Entity e : entities) {
+        if (world().valid(e)) {
+            uuids.push_back(scene::uuid_of(world(), e));
+        }
+    }
+    selection_.set_all(uuids);
+}
+
+Entity EditorApp::selected() {
+    const u64 p = selection_.primary();
+    return p != 0 ? scene::find_by_uuid(world(), p) : kNullEntity;
+}
+
+std::vector<Entity> EditorApp::selection() { return selection_.entities(world()); }
+
+bool EditorApp::is_selected(Entity e) { return world().valid(e) && selection_.contains(scene::uuid_of(world(), e)); }
 
 void EditorApp::record_edit(const char* label) {
     if (play_state_ == PlayState::Edit) {
+        bind_material_instances(world()); // duplicates / instances get their own material ids
         history_.record(label, world());
+    }
+}
+
+void EditorApp::flush_deferred_edits() {
+    if (deferred_end_) {
+        deferred_end_ = false;
+        end_edit();
+    }
+    if (!deferred_commit_.empty()) {
+        const std::string label = std::move(deferred_commit_);
+        deferred_commit_.clear();
+        record_edit(label.c_str());
     }
 }
 void EditorApp::begin_edit(const char* label) {
@@ -379,7 +459,7 @@ void EditorApp::new_scene() {
     });
     (void)r;
     scene_path_.clear();
-    selected_uuid_ = 0;
+    selection_.clear();
     history_.clear();
     history_.mark_clean(world());
     AE_LOG_INFO("Editor", "new scene");
@@ -401,8 +481,8 @@ bool EditorApp::open_scene(const std::filesystem::path& file) {
         AE_LOG_ERROR("Editor", "open {} failed: {}", path.generic_string(), r.error().message);
         return false;
     }
-    scene_path_    = path;
-    selected_uuid_ = 0;
+    scene_path_ = path;
+    selection_.clear();
     history_.clear();
     history_.mark_clean(world());
     AE_LOG_INFO("Editor", "opened {} ({} entities)", path.generic_string(), world().entity_count());
@@ -501,10 +581,8 @@ void EditorApp::delete_entity(Entity e) {
     if (!world().valid(e)) {
         return;
     }
-    if (selected() == e || scene::is_ancestor(world(), e, selected())) {
-        selected_uuid_ = 0;
-    }
     world().destroy(e);
+    selection_.prune(world());
     record_edit("Delete");
 }
 
@@ -541,17 +619,23 @@ bool EditorApp::instantiate_asset(const std::filesystem::path& rel) {
     if (ext == ".aescene") {
         return open_scene(rel);
     }
+    const Vec3 in_front = glm::round((camera_.position + (camera_.rotation * Vec3(0, 0, -1)) * 6.0f) * 2.0f) * 0.5f;
     if (ext == ".gltf" || ext == ".glb") {
-        auto inst = gameplay::instantiate_model(assets(), world(), rel.generic_string());
-        if (!inst) {
-            AE_LOG_ERROR("Editor", "{}", inst.error().message);
+        const Entity root = instantiate_model_at(rel, kNullEntity, in_front);
+        if (root == kNullEntity) {
             return false;
         }
-        const Vec3 p = camera_.position + (camera_.rotation * Vec3(0, 0, -1)) * 6.0f;
-        scene::set_local_position(world(), inst->root, glm::round(p * 2.0f) * 0.5f);
-        world().update_transforms();
         record_edit("Instantiate model");
-        select(inst->root);
+        select(root);
+        return true;
+    }
+    if (ext == kPrefabExtension) {
+        const auto roots = instantiate_prefab_file(rel, kNullEntity, glm::translate(Mat4(1.0f), in_front));
+        if (roots.empty()) {
+            return false;
+        }
+        record_edit("Instantiate prefab");
+        select_entities(roots);
         return true;
     }
     if (ext == ".lua") {

@@ -4,7 +4,9 @@
 //   mesh        -> MeshData; each triangle primitive becomes a Submesh; primitives that use
 //                  the same material share a material slot (slot order = first use).
 //   material    -> MaterialData (metallic-roughness; spec-gloss approximated).
-//   image       -> TextureData, once per (image, colour space) actually referenced.
+//   image       -> TextureData, once per (image, role) actually referenced; cooked (mips, BC7/BC5)
+//                  per ImportSettings; external images shared with a standalone import are
+//                  referenced, not copied (see importers.h).
 //   skin        -> SkeletonData. Joints are topologically sorted (parents first) with a
 //                  stable order (an already-sorted skin keeps its order). Non-joint nodes
 //                  BETWEEN joints are included as extra joints (identity-free hierarchy), and
@@ -12,10 +14,12 @@
 //                  not identity, a synthetic root joint carrying it is inserted, so that
 //                  "skeleton model space" == the skinned mesh node's local space. The same
 //                  remap is applied to SkinVertex joint indices and animation channels.
-//   animation   -> AnimationClipData bound to the skeleton most of its channels target.
+//   animation   -> AnimationClipData bound to the skeleton most of its channels target;
+//                  channels on non-joint nodes -> "node_anim:<a>" over "node_skeleton:<s>".
 //   scene       -> SceneData (depth-first, parents before children).
 #include "aether/assets/importers.h"
 #include "aether/assets/mesh_processing.h"
+#include "aether/assets/texture_processing.h"
 
 #include "file_util.h"
 #include "math_util.h"
@@ -223,7 +227,38 @@ private:
         return std::format("Image_{}", index);
     }
 
-    AssetId texture_for(const cgltf_texture_view& view, bool srgb, StringView material_name, StringView slot) {
+    static StringView role_suffix(TextureRole role) {
+        switch (role) {
+        case TextureRole::Color: return "srgb";
+        case TextureRole::NormalMap: return "normal";
+        case TextureRole::Data: break;
+        }
+        return "linear";
+    }
+
+    // De-duplication (importers.h): the standalone-image asset of an external image file inside
+    // the content root when its standalone import yields the same variant, else nothing.
+    AssetId shared_standalone_texture(const cgltf_image& image, TextureRole role) {
+        if (settings_.content_root.empty() || image.buffer_view || !image.uri) return {};
+        const StringView uri(image.uri);
+        if (uri.starts_with("data:") || uri.find("://") != StringView::npos) return {};
+        String decoded(uri);
+        cgltf_decode_uri(decoded.data());
+        decoded.resize(std::strlen(decoded.c_str()));
+        const fs::path  file = path_.parent_path() / detail::from_utf8(decoded);
+        std::error_code ec;
+        if (!is_image_source(file) || !fs::is_regular_file(file, ec)) return {};
+        const String rel = canonical_source_path(file, settings_.content_root);
+        if (rel.empty() || detail::from_utf8(rel).is_absolute() || rel.starts_with("..")) return {};
+        if (standalone_image_role(file, settings_) != role) return {};
+        if (std::find(out_.referenced_sources.begin(), out_.referenced_sources.end(), file) ==
+            out_.referenced_sources.end()) {
+            out_.referenced_sources.push_back(file);
+        }
+        return make_asset_id(rel, "texture:0");
+    }
+
+    AssetId texture_for(const cgltf_texture_view& view, TextureRole role, StringView material_name, StringView slot) {
         if (!view.texture) return {};
         const cgltf_image* image = view.texture->image;
         if (!image) {
@@ -238,10 +273,15 @@ private:
         if (view.has_transform) warn("material '{}' {}: KHR_texture_transform is ignored", material_name, slot);
 
         const usize image_index = cgltf_image_index(data_, image);
-        const u64   cache_key = (static_cast<u64>(image_index) << 1) | (srgb ? 1u : 0u);
+        const u64   cache_key = (static_cast<u64>(image_index) << 2) | static_cast<u64>(role);
         if (auto it = texture_cache_.find(cache_key); it != texture_cache_.end()) return it->second;
 
-        const String  key = std::format("texture:{}:{}", image_index, srgb ? "srgb" : "linear");
+        if (const AssetId shared = shared_standalone_texture(*image, role); shared.is_valid()) {
+            texture_cache_[cache_key] = shared;
+            return shared;
+        }
+
+        const String  key = std::format("texture:{}:{}", image_index, role_suffix(role));
         const AssetId id = id_for(key);
         if (!settings_.import_textures) {
             texture_cache_[cache_key] = id; // ids stay deterministic even without pixel data
@@ -255,11 +295,17 @@ private:
             texture_cache_[cache_key] = AssetId{};
             return {};
         }
-        auto tex = decode_image(bytes, srgb, name);
+        auto tex = decode_image(bytes, role == TextureRole::Color, name);
         if (!tex) {
             warn("image '{}': {}", name, tex.error().message);
             texture_cache_[cache_key] = AssetId{};
             return {};
+        }
+        if (settings_.generate_mips || settings_.compress_textures) {
+            const TextureCookOptions options{ true, settings_.compress_textures, settings_.mip_filter };
+            if (auto r = cook_texture(*tex, role, options); !r) {
+                warn("image '{}': texture cooking failed ({}); imported uncooked", name, r.error().message);
+            }
         }
         out_.textures.push_back({ id, key, name, std::move(*tex) });
         texture_cache_[cache_key] = id;
@@ -280,9 +326,9 @@ private:
                                             pbr.base_color_factor[2], pbr.base_color_factor[3]);
                 md.metallic_factor = pbr.metallic_factor;
                 md.roughness_factor = pbr.roughness_factor;
-                md.base_color_texture = texture_for(pbr.base_color_texture, true, md.name, "baseColor");
+                md.base_color_texture = texture_for(pbr.base_color_texture, TextureRole::Color, md.name, "baseColor");
                 md.metallic_roughness_texture =
-                    texture_for(pbr.metallic_roughness_texture, false, md.name, "metallicRoughness");
+                    texture_for(pbr.metallic_roughness_texture, TextureRole::Data, md.name, "metallicRoughness");
             } else {
                 const cgltf_pbr_specular_glossiness& sg = m.pbr_specular_glossiness;
                 warn("material '{}': KHR_materials_pbrSpecularGlossiness approximated as metallic-roughness",
@@ -291,13 +337,13 @@ private:
                                             sg.diffuse_factor[3]);
                 md.metallic_factor = 0.0f;
                 md.roughness_factor = 1.0f - sg.glossiness_factor;
-                md.base_color_texture = texture_for(sg.diffuse_texture, true, md.name, "diffuse");
+                md.base_color_texture = texture_for(sg.diffuse_texture, TextureRole::Color, md.name, "diffuse");
             }
-            md.normal_texture = texture_for(m.normal_texture, false, md.name, "normal");
+            md.normal_texture = texture_for(m.normal_texture, TextureRole::NormalMap, md.name, "normal");
             md.normal_scale = m.normal_texture.texture ? m.normal_texture.scale : 1.0f;
-            md.occlusion_texture = texture_for(m.occlusion_texture, false, md.name, "occlusion");
+            md.occlusion_texture = texture_for(m.occlusion_texture, TextureRole::Data, md.name, "occlusion");
             md.occlusion_strength = m.occlusion_texture.texture ? m.occlusion_texture.scale : 1.0f;
-            md.emissive_texture = texture_for(m.emissive_texture, true, md.name, "emissive");
+            md.emissive_texture = texture_for(m.emissive_texture, TextureRole::Color, md.name, "emissive");
             const f32 emissive_strength = m.has_emissive_strength ? m.emissive_strength.emissive_strength : 1.0f;
             md.emissive_factor = Vec3(m.emissive_factor[0], m.emissive_factor[1], m.emissive_factor[2]) *
                                  emissive_strength;
@@ -698,7 +744,9 @@ private:
                 warn("mesh '{}' primitive {}: no normals and generation disabled", mesh_name, prim_index);
             }
         }
-        if (!has_tangents && settings_.generate_tangents) generate_tangents(out.vertices, out.indices);
+        if (!has_tangents && settings_.generate_tangents) {
+            generate_tangents_mikktspace(out.vertices, out.indices, skin ? &out.skin : nullptr);
+        }
         if (prim.targets_count > 0) {
             warn("mesh '{}' primitive {}: morph targets are not supported (ignored)", mesh_name, prim_index);
         }
@@ -797,96 +845,193 @@ private:
                     best = static_cast<i32>(si);
                 }
             }
-            if (best < 0) {
-                warn("animation '{}': targets no skeleton joint (node animation is not supported); skipped", name);
-                continue;
-            }
-            const SkinInfo& skin = skins_[static_cast<usize>(best)];
+            const SkinInfo* skin = best >= 0 ? &skins_[static_cast<usize>(best)] : nullptr;
 
-            AnimationClipData clip;
+            AnimationClipData clip; // skeletal part (channels targeting the bound skin's joints)
             clip.name = name;
-            clip.skeleton = skin.id;
-            usize dropped = 0;
+            clip.skeleton = skin ? skin->id : AssetId{};
+            AnimationClipData node_clip; // node part (channels targeting other scene nodes)
+            node_clip.name = name;
+            usize dropped = 0, outside_scene = 0;
             for (usize c = 0; c < anim.channels_count; ++c) {
                 const cgltf_animation_channel& ch = anim.channels[c];
                 if (!ch.target_node || !ch.sampler) continue;
-                AnimPath path;
-                usize    components;
-                switch (ch.target_path) {
-                case cgltf_animation_path_type_translation: path = AnimPath::Translation; components = 3; break;
-                case cgltf_animation_path_type_rotation: path = AnimPath::Rotation; components = 4; break;
-                case cgltf_animation_path_type_scale: path = AnimPath::Scale; components = 3; break;
-                default:
-                    warn("animation '{}': morph-weight channels are not supported (ignored)", name);
-                    continue;
+                AnimationChannel out;
+                if (!read_channel(ch, name, c, out)) continue;
+                if (skin) {
+                    if (auto joint = skin->node_to_joint.find(ch.target_node); joint != skin->node_to_joint.end()) {
+                        out.joint = joint->second;
+                        clip.duration = std::max(clip.duration, out.times.back());
+                        clip.channels.push_back(std::move(out));
+                        continue;
+                    }
                 }
-                auto joint = skin.node_to_joint.find(ch.target_node);
-                if (joint == skin.node_to_joint.end()) {
+                if (is_skin_joint(ch.target_node)) { // a joint of another skin
                     ++dropped;
                     continue;
                 }
-                AnimationChannel out;
-                out.joint = joint->second;
-                out.path = path;
-                switch (ch.sampler->interpolation) {
-                case cgltf_interpolation_type_step: out.interpolation = Interpolation::Step; break;
-                case cgltf_interpolation_type_cubic_spline: out.interpolation = Interpolation::CubicSpline; break;
-                default: out.interpolation = Interpolation::Linear; break;
-                }
-                std::vector<f32> values;
-                if (!read_floats(ch.sampler->input, 1, out.times) || !read_floats(ch.sampler->output, components, values)) {
-                    warn("animation '{}' channel {}: unreadable sampler data; skipped", name, c);
+                const i32 node = default_scene_node_index(ch.target_node);
+                if (node < 0) {
+                    ++outside_scene;
                     continue;
                 }
-                const usize per_key = out.interpolation == Interpolation::CubicSpline ? 3 : 1;
-                const usize keys = out.times.size();
-                if (keys == 0 || values.size() != keys * per_key * components) {
-                    warn("animation '{}' channel {}: key/value count mismatch; skipped", name, c);
-                    continue;
-                }
-                for (usize k = 1; k < keys; ++k) {
-                    if (!(out.times[k] > out.times[k - 1])) {
-                        warn("animation '{}' channel {}: key times are not strictly increasing", name, c);
-                        break;
-                    }
-                }
-                out.values.resize(keys * per_key);
-                for (usize v = 0; v < out.values.size(); ++v) {
-                    const f32* src = &values[v * components];
-                    out.values[v] = components == 4 ? Vec4(src[0], src[1], src[2], src[3])
-                                                    : Vec4(src[0], src[1], src[2], 0.0f);
-                    if (path == AnimPath::Rotation && per_key == 1) {
-                        const f32 len = detail::length(out.values[v]);
-                        out.values[v] = len > 1e-20f ? out.values[v] / len : Vec4(0.0f, 0.0f, 0.0f, 1.0f);
-                    }
-                }
-                clip.duration = std::max(clip.duration, out.times.back());
-                clip.channels.push_back(std::move(out));
+                out.joint = static_cast<u32>(node);
+                node_clip.duration = std::max(node_clip.duration, out.times.back());
+                node_clip.channels.push_back(std::move(out));
             }
             if (dropped > 0) {
-                warn("animation '{}': {} channel(s) target nodes outside the bound skeleton (dropped)", name,
-                     dropped);
+                warn("animation '{}': {} channel(s) target joints of a skin other than the bound one (dropped)",
+                     name, dropped);
             }
-            if (clip.channels.empty()) {
+            if (outside_scene > 0) {
+                warn("animation '{}': {} channel(s) target nodes outside the default scene (dropped)", name,
+                     outside_scene);
+            }
+            if (clip.channels.empty() && node_clip.channels.empty()) {
                 warn("animation '{}': no usable channels; skipped", name);
                 continue;
             }
-            const String key = std::format("anim:{}", ai);
-            out_.animations.push_back({ id_for(key), key, name, std::move(clip) });
+            if (!clip.channels.empty()) {
+                const String key = std::format("anim:{}", ai);
+                out_.animations.push_back({ id_for(key), key, name, std::move(clip) });
+            }
+            if (!node_clip.channels.empty()) {
+                node_clip.skeleton = node_skeleton_id();
+                const String key = std::format("node_anim:{}", ai);
+                out_.animations.push_back({ id_for(key), key, name, std::move(node_clip) });
+            }
         }
     }
 
+    // Reads one TRS channel's sampler (joint left for the caller). False = skipped (warned).
+    bool read_channel(const cgltf_animation_channel& ch, StringView name, usize c, AnimationChannel& out) {
+        usize components;
+        switch (ch.target_path) {
+        case cgltf_animation_path_type_translation: out.path = AnimPath::Translation; components = 3; break;
+        case cgltf_animation_path_type_rotation: out.path = AnimPath::Rotation; components = 4; break;
+        case cgltf_animation_path_type_scale: out.path = AnimPath::Scale; components = 3; break;
+        default:
+            warn("animation '{}': morph-weight channels are not supported (ignored)", name);
+            return false;
+        }
+        switch (ch.sampler->interpolation) {
+        case cgltf_interpolation_type_step: out.interpolation = Interpolation::Step; break;
+        case cgltf_interpolation_type_cubic_spline: out.interpolation = Interpolation::CubicSpline; break;
+        default: out.interpolation = Interpolation::Linear; break;
+        }
+        std::vector<f32> values;
+        if (!read_floats(ch.sampler->input, 1, out.times) || !read_floats(ch.sampler->output, components, values)) {
+            warn("animation '{}' channel {}: unreadable sampler data; skipped", name, c);
+            return false;
+        }
+        const usize per_key = out.interpolation == Interpolation::CubicSpline ? 3 : 1;
+        const usize keys = out.times.size();
+        if (keys == 0 || values.size() != keys * per_key * components) {
+            warn("animation '{}' channel {}: key/value count mismatch; skipped", name, c);
+            return false;
+        }
+        for (usize k = 1; k < keys; ++k) {
+            if (!(out.times[k] > out.times[k - 1])) {
+                warn("animation '{}' channel {}: key times are not strictly increasing", name, c);
+                break;
+            }
+        }
+        out.values.resize(keys * per_key);
+        for (usize v = 0; v < out.values.size(); ++v) {
+            const f32* src = &values[v * components];
+            out.values[v] = components == 4 ? Vec4(src[0], src[1], src[2], src[3]) : Vec4(src[0], src[1], src[2], 0.0f);
+            if (out.path == AnimPath::Rotation && per_key == 1) {
+                const f32 len = detail::length(out.values[v]);
+                out.values[v] = len > 1e-20f ? out.values[v] / len : Vec4(0.0f, 0.0f, 0.0f, 1.0f);
+            }
+        }
+        return true;
+    }
+
+    bool is_skin_joint(const cgltf_node* node) const {
+        for (const SkinInfo& s : skins_) {
+            if (s.node_to_joint.contains(node)) return true;
+        }
+        return false;
+    }
+
     // ------------------------------------------------------------------ scenes
-    SceneData build_scene(String name, const std::vector<const cgltf_node*>& roots) {
-        SceneData scene;
-        scene.name = std::move(name);
-        std::unordered_set<const cgltf_node*> visited;
+    // Index of the default scene (the one "primary" points at; 0 for the implicit scene).
+    usize default_scene_index() const {
+        return data_->scene && data_->scenes_count > 0 ? cgltf_scene_index(data_, data_->scene) : 0;
+    }
+
+    std::vector<const cgltf_node*> scene_roots(usize si) const {
+        if (si < data_->scenes_count) {
+            const cgltf_scene& s = data_->scenes[si];
+            return { s.nodes, s.nodes + s.nodes_count };
+        }
+        std::vector<const cgltf_node*> roots; // implicit scene: every parentless node
+        for (usize ni = 0; ni < data_->nodes_count; ++ni) {
+            if (!data_->nodes[ni].parent) roots.push_back(&data_->nodes[ni]);
+        }
+        return roots;
+    }
+
+    // Depth-first order (parents before children) with parent indices: the SceneData layout.
+    static std::vector<std::pair<const cgltf_node*, i32>> scene_order(const std::vector<const cgltf_node*>& roots) {
+        std::vector<std::pair<const cgltf_node*, i32>> order;
+        std::unordered_set<const cgltf_node*>          visited;
         std::vector<std::pair<const cgltf_node*, i32>> stack;
         for (auto it = roots.rbegin(); it != roots.rend(); ++it) stack.emplace_back(*it, -1);
         while (!stack.empty()) {
             const auto [node, parent] = stack.back();
             stack.pop_back();
             if (!node || !visited.insert(node).second) continue;
+            const i32 index = static_cast<i32>(order.size());
+            order.emplace_back(node, parent);
+            for (usize c = node->children_count; c-- > 0;) stack.emplace_back(node->children[c], index);
+        }
+        return order;
+    }
+
+    // SceneData node index of `node` in the default scene (-1 if absent). Builds the order once.
+    i32 default_scene_node_index(const cgltf_node* node) {
+        if (!default_order_built_) {
+            default_order_ = scene_order(scene_roots(default_scene_index()));
+            for (usize i = 0; i < default_order_.size(); ++i) default_index_[default_order_[i].first] = static_cast<i32>(i);
+            default_order_built_ = true;
+        }
+        auto it = default_index_.find(node);
+        return it == default_index_.end() ? -1 : it->second;
+    }
+
+    // The default scene's node skeleton (joint i == SceneData node i); emitted on first use.
+    AssetId node_skeleton_id() {
+        const String key = std::format("node_skeleton:{}", default_scene_index());
+        const AssetId id = id_for(key);
+        if (node_skeleton_emitted_) return id;
+        node_skeleton_emitted_ = true;
+        (void)default_scene_node_index(nullptr); // make sure the order exists
+        SkeletonData skel;
+        const usize  n = default_order_.size();
+        skel.joint_names.resize(n);
+        skel.parents.resize(n);
+        skel.bind_local.resize(n);
+        skel.inverse_bind.resize(n);
+        std::vector<Mat4> model(n, Mat4(1.0f));
+        for (usize i = 0; i < n; ++i) {
+            const auto [node, parent] = default_order_[i];
+            skel.joint_names[i] = node_display_name(data_, node);
+            skel.parents[i] = parent;
+            skel.bind_local[i] = node_local_transform(*node);
+            model[i] = (parent >= 0 ? model[static_cast<usize>(parent)] : Mat4(1.0f)) * skel.bind_local[i].to_matrix();
+            skel.inverse_bind[i] = detail::inverse(model[i]);
+        }
+        const String name = std::format("{}_Nodes", detail::to_utf8(path_.stem()));
+        out_.skeletons.push_back({ id, key, name, std::move(skel) });
+        return id;
+    }
+
+    SceneData build_scene(String name, const std::vector<const cgltf_node*>& roots) {
+        SceneData scene;
+        scene.name = std::move(name);
+        for (const auto& [node, parent] : scene_order(roots)) {
             SceneNodeData sn;
             sn.name = node_display_name(data_, node);
             sn.parent = parent;
@@ -897,9 +1042,7 @@ private:
                 if (sn.mesh.is_valid()) sn.materials = mesh_slots_[mi];
             }
             if (node->skin) sn.skeleton = skins_[cgltf_skin_index(data_, node->skin)].id;
-            const i32 index = static_cast<i32>(scene.nodes.size());
             scene.nodes.push_back(std::move(sn));
-            for (usize c = node->children_count; c-- > 0;) stack.emplace_back(node->children[c], index);
         }
         return scene;
     }
@@ -907,24 +1050,17 @@ private:
     void import_scenes() {
         for (usize si = 0; si < data_->scenes_count; ++si) {
             const cgltf_scene& s = data_->scenes[si];
-            std::vector<const cgltf_node*> roots(s.nodes, s.nodes + s.nodes_count);
             const String name = (s.name && s.name[0]) ? String(s.name) : std::format("Scene_{}", si);
             const String key = std::format("scene:{}", si);
-            out_.scenes.push_back({ id_for(key), key, name, build_scene(name, roots) });
+            out_.scenes.push_back({ id_for(key), key, name, build_scene(name, scene_roots(si)) });
         }
         if (data_->scenes_count == 0 && data_->nodes_count > 0) {
-            std::vector<const cgltf_node*> roots;
-            for (usize ni = 0; ni < data_->nodes_count; ++ni) {
-                if (!data_->nodes[ni].parent) roots.push_back(&data_->nodes[ni]);
-            }
             const String name = detail::to_utf8(path_.stem());
-            out_.scenes.push_back({ id_for("scene:0"), "scene:0", name, build_scene(name, roots) });
+            out_.scenes.push_back({ id_for("scene:0"), "scene:0", name, build_scene(name, scene_roots(0)) });
         }
 
         if (!out_.scenes.empty()) {
-            const usize default_scene =
-                data_->scene && data_->scenes_count > 0 ? cgltf_scene_index(data_, data_->scene) : 0;
-            out_.primary = out_.scenes[std::min(default_scene, out_.scenes.size() - 1)].id;
+            out_.primary = out_.scenes[std::min(default_scene_index(), out_.scenes.size() - 1)].id;
         } else if (!out_.meshes.empty()) {
             out_.primary = out_.meshes.front().id;
         } else if (!out_.materials.empty()) {
@@ -943,6 +1079,12 @@ private:
     std::vector<SkinInfo>             skins_;
     std::vector<AssetId>              mesh_ids_;
     std::vector<std::vector<AssetId>> mesh_slots_;
+
+    // Default-scene node order (node animation), built on first use.
+    bool                                           default_order_built_ = false;
+    std::vector<std::pair<const cgltf_node*, i32>> default_order_;
+    std::unordered_map<const cgltf_node*, i32>     default_index_;
+    bool                                           node_skeleton_emitted_ = false;
 };
 
 } // namespace

@@ -110,6 +110,21 @@
       "name": "wip-editor",
       "displayName": "WIP: editor (all modules)",
       "inherits": "debug-base"
+    },
+    {
+      "name": "m2-graphics",
+      "displayName": "M2: graphics agent (all modules)",
+      "inherits": "debug-base"
+    },
+    {
+      "name": "m2-assets",
+      "displayName": "M2: assets agent (all modules)",
+      "inherits": "debug-base"
+    },
+    {
+      "name": "m2-editor",
+      "displayName": "M2: editor agent (all modules)",
+      "inherits": "debug-base"
     }
   ],
   "buildPresets": [
@@ -168,6 +183,21 @@
     {
       "name": "wip-editor",
       "configurePreset": "wip-editor",
+      "jobs": 6
+    },
+    {
+      "name": "m2-graphics",
+      "configurePreset": "m2-graphics",
+      "jobs": 8
+    },
+    {
+      "name": "m2-assets",
+      "configurePreset": "m2-assets",
+      "jobs": 4
+    },
+    {
+      "name": "m2-editor",
+      "configurePreset": "m2-editor",
       "jobs": 6
     }
   ]

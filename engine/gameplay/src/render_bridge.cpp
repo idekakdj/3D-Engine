@@ -31,8 +31,16 @@ rhi::Format to_rhi_format(assets::TextureFormat f) {
     case assets::TextureFormat::RGBA8_SRGB: return rhi::Format::RGBA8Srgb;
     case assets::TextureFormat::RGBA16F: return rhi::Format::RGBA16F;
     case assets::TextureFormat::RGBA32F: return rhi::Format::RGBA32F;
+    case assets::TextureFormat::BC7_SRGB: return rhi::Format::BC7Srgb;
+    case assets::TextureFormat::BC7_UNORM: return rhi::Format::BC7Unorm;
+    case assets::TextureFormat::BC5_UNORM: return rhi::Format::BC5Unorm;
     }
     return rhi::Format::RGBA8Srgb;
+}
+
+bool is_block_compressed(assets::TextureFormat f) {
+    return f == assets::TextureFormat::BC7_SRGB || f == assets::TextureFormat::BC7_UNORM ||
+           f == assets::TextureFormat::BC5_UNORM;
 }
 
 usize texel_bytes(assets::TextureFormat f) {
@@ -41,6 +49,17 @@ usize texel_bytes(assets::TextureFormat f) {
     case assets::TextureFormat::RGBA32F: return 16;
     default: return 4;
     }
+}
+
+// Bytes for mips [0, mips) of every layer (ADR-0009: BCn = 16-byte 4x4 blocks).
+usize texture_bytes(assets::TextureFormat f, u32 w, u32 h, u32 layers, u32 mips) {
+    usize total = 0;
+    for (u32 m = 0; m < mips; ++m) {
+        const usize mw = std::max(w >> m, 1u);
+        const usize mh = std::max(h >> m, 1u);
+        total += is_block_compressed(f) ? ((mw + 3) / 4) * ((mh + 3) / 4) * 16 : mw * mh * texel_bytes(f);
+    }
+    return total * layers;
 }
 
 renderer::BlendMode to_blend(assets::AlphaMode m) {
@@ -174,15 +193,18 @@ struct RenderResourceCache::Impl {
         up.height        = data.height;
         up.array_layers  = std::max(data.array_layers, 1u);
         up.cubemap       = data.is_cubemap;
-        up.generate_mips = true;
-        // Only mip 0 is uploaded (the renderer regenerates the chain).
-        const usize mip0 = static_cast<usize>(data.width) * data.height * up.array_layers * texel_bytes(data.format);
-        if (data.width == 0 || data.height == 0 || data.pixels.size() < mip0) {
+        // Cooked textures may carry their own mip chain (always, for BCn - ADR-0009); otherwise
+        // only mip 0 is uploaded and the renderer generates the chain.
+        const u32 mips   = std::max(data.mip_levels, 1u);
+        up.mip_levels    = mips;
+        up.generate_mips = mips == 1 && !is_block_compressed(data.format);
+        const usize bytes = texture_bytes(data.format, data.width, data.height, up.array_layers, mips);
+        if (data.width == 0 || data.height == 0 || data.pixels.size() < bytes) {
             AE_LOG_ERROR("RenderBridge", "texture {} has no usable pixel data", id.to_string());
             e.state = LoadState::Failed;
             return;
         }
-        up.pixels     = ByteSpan(reinterpret_cast<const byte*>(data.pixels.data()), mip0);
+        up.pixels     = ByteSpan(reinterpret_cast<const byte*>(data.pixels.data()), bytes);
         up.debug_name = debug_name_for(id, "texture");
         const renderer::TextureHandle h = renderer.register_texture(up);
         if (e.handle.is_valid()) {
@@ -658,6 +680,7 @@ SceneExtractStats extract_render_scene(const World& world, RenderResourceCache& 
             inst.flags        = flags;
             inst.first_joint  = first_joint;
             inst.joint_count  = joint_count;
+            inst.user_id      = static_cast<u32>(entt::to_entity(e)) + 1u; // ADR-0009 picking id
             out.instances.push_back(inst);
             ++stats.instances;
         }

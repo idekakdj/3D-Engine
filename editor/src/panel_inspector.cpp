@@ -1,12 +1,21 @@
-// panel_inspector.cpp — per-component property editing for the selected entity.
+// panel_inspector.cpp — per-component property editing for the selection.
+//
+// Single selection: every component of the entity. Multi-selection: the widgets show the PRIMARY
+// (last selected) entity's values and only the components ALL selected entities share; a changed
+// field is copied to every selected entity (Unreal multi-edit: only the edited property
+// propagates, per axis for vectors). Adding / removing a component applies to all.
 //
 // Undo: drags / text inputs open a continuous edit on the first change and close it when the
-// widget is deactivated; toggles and combos record a discrete step. Components that other
-// modules track through registry signals (physics, scripts) are patch()ed after edits so the
-// owning systems see them.
+// widget is deactivated; toggles and combos record a discrete step. Both the close and the
+// discrete record are deferred to the end of the panel (flush_deferred_edits) so the propagated
+// copies land in the same undo step. Components that other modules track through registry
+// signals (physics, scripts) are patch()ed after edits so the owning systems see them.
 #include "editor_app.h"
 
 #include "aether/animation/components.h"
+#include "aether/editor/material_instance.h"
+#include "aether/editor/multi_edit.h"
+#include "aether/editor/prefab.h"
 #include "aether/gameplay/camera_controller.h"
 #include "aether/gameplay/components.h"
 #include "aether/gameplay/render_bridge.h"
@@ -24,6 +33,7 @@
 #include <array>
 #include <cstdio>
 #include <format>
+#include <span>
 
 namespace aether::editor {
 
@@ -79,6 +89,23 @@ bool component_header(const char* title, bool* remove, bool default_open = true)
     return open;
 }
 
+template <class T>
+bool all_have(const World& w, std::span<const Entity> entities) {
+    for (const Entity e : entities) {
+        if (!w.has<T>(e)) {
+            return false;
+        }
+    }
+    return !entities.empty();
+}
+
+template <class T>
+void remove_all(World& w, std::span<const Entity> entities) {
+    for (const Entity e : entities) {
+        w.registry().remove<T>(e);
+    }
+}
+
 } // namespace
 
 void EditorApp::draw_inspector() {
@@ -86,60 +113,134 @@ void EditorApp::draw_inspector() {
         ImGui::End();
         return;
     }
-    World&       w = world();
-    const Entity e = selected();
+    World&                    w   = world();
+    const std::vector<Entity> sel = selection();
+    const Entity              e   = selected();
     if (e == kNullEntity) {
         ImGui::TextDisabled("Nothing selected.");
         ImGui::TextDisabled("Click an entity in the viewport or the hierarchy.");
         ImGui::End();
         return;
     }
+    const bool          multi = sel.size() > 1;
+    std::vector<Entity> others;
+    for (const Entity x : sel) {
+        if (x != e) {
+            others.push_back(x);
+        }
+    }
     auto&      reg = w.registry();
-    const Edit ed{ *this, "Edit", [this](const char* l) { begin_edit(l); }, [this] { end_edit(); },
-                   [this](const char* l) { record_edit(l); } };
+    const Edit ed{ *this, "Edit", [this](const char* l) { begin_edit(l); }, [this] { defer_end(); },
+                   [this](const char* l) { defer_commit(l); } };
     auto with = [&](const char* label) {
         Edit x = ed;
         x.label = label;
         return x;
     };
+    // A section is shown for the primary if (single) it has it, or (multi) every selected entity has it.
+    auto shown = [&](auto* component, auto tag) {
+        using T = typename decltype(tag)::type;
+        return component != nullptr && (!multi || all_have<T>(w, sel));
+    };
+    auto finish = [&] {
+        flush_deferred_edits();
+        ImGui::End();
+    };
 
     // ---- identity ----
-    if (auto* name = w.try_get<NameComponent>(e)) {
+    if (multi) {
+        ImGui::Text("%zu entities selected", sel.size());
+        ImGui::TextDisabled("Showing '%s' (primary); edits apply to all.", w.get<NameComponent>(e).name.c_str());
+        bool visible = scene::is_visible(w, e);
+        if (ImGui::Checkbox("Visible", &visible)) {
+            for (const Entity x : sel) {
+                scene::set_visible(w, x, visible);
+            }
+            defer_commit("Visibility");
+        }
+    } else if (auto* name = w.try_get<NameComponent>(e)) {
         ImGui::SetNextItemWidth(-80.0f);
         with("Rename").drag(input_text("##name", name->name));
         ImGui::SameLine();
         bool visible = scene::is_visible(w, e);
         if (ImGui::Checkbox("Visible", &visible)) {
             scene::set_visible(w, e, visible);
-            record_edit("Visibility");
+            defer_commit("Visibility");
         }
+        ImGui::TextDisabled("uuid %s", scene::uuid_to_string(scene::uuid_of(w, e)).c_str());
     }
-    ImGui::TextDisabled("uuid %s", scene::uuid_to_string(scene::uuid_of(w, e)).c_str());
     ImGui::Separator();
 
-    // ---- transform ----
+    // ---- prefab link ----
+    if (const auto* link = w.try_get<PrefabInstanceComponent>(e); link != nullptr && !multi) {
+        if (component_header("Prefab", nullptr)) {
+            ImGui::TextWrapped("%s", link->source.c_str());
+            const u64 uuid = scene::uuid_of(w, e);
+            if (ImGui::SmallButton("Revert")) {
+                pending_prefab_ops_.emplace_back(uuid, false);
+            }
+            ImGui::SameLine();
+            if (ImGui::SmallButton("Apply")) {
+                pending_prefab_ops_.emplace_back(uuid, true);
+            }
+            ImGui::SameLine();
+            if (ImGui::SmallButton("Unlink")) {
+                reg.remove<PrefabInstanceComponent>(e);
+                defer_commit("Unlink prefab");
+                finish();
+                return;
+            }
+            ImGui::SameLine();
+            if (ImGui::SmallButton("Browse")) {
+                assets_dir_  = std::filesystem::path(link->source).parent_path();
+                show_assets_ = true;
+            }
+        }
+    }
+
+    // ---- transform (per-axis multi-edit) ----
     if (reg.all_of<TransformComponent>(e) && component_header("Transform", nullptr)) {
-        Transform t       = w.get<TransformComponent>(e).local;
-        Vec3      euler   = glm::degrees(glm::eulerAngles(t.rotation));
-        bool      changed = false;
+        Transform  t      = w.get<TransformComponent>(e).local;
+        Vec3       euler  = glm::degrees(glm::eulerAngles(t.rotation));
+        const Transform t0 = t;
+        const Vec3 euler0 = euler;
+        bool       changed = false;
+        bool       rotated = false;
         changed |= with("Move").drag(ImGui::DragFloat3("Position", &t.position.x, 0.05f));
         if (with("Rotate").drag(ImGui::DragFloat3("Rotation", &euler.x, 0.5f))) {
             t.rotation = glm::normalize(Quat(glm::radians(euler)));
             changed    = true;
+            rotated    = true;
         }
         changed |= with("Scale").drag(ImGui::DragFloat3("Scale", &t.scale.x, 0.01f));
         if (changed) {
             scene::set_local_transform(w, e, t);
+            for (const Entity o : others) {
+                Transform ot = scene::local_transform(w, o);
+                Vec3      oe = glm::degrees(glm::eulerAngles(ot.rotation));
+                for (int i = 0; i < 3; ++i) {
+                    if (t.position[i] != t0.position[i]) ot.position[i] = t.position[i];
+                    if (t.scale[i] != t0.scale[i]) ot.scale[i] = t.scale[i];
+                    if (rotated && euler[i] != euler0[i]) oe[i] = euler[i];
+                }
+                if (rotated) {
+                    ot.rotation = glm::normalize(Quat(glm::radians(oe)));
+                }
+                scene::set_local_transform(w, o, ot);
+            }
         }
         if (ImGui::SmallButton("Reset")) {
-            scene::set_local_transform(w, e, Transform{});
-            record_edit("Reset transform");
+            for (const Entity x : sel) {
+                scene::set_local_transform(w, x, Transform{});
+            }
+            defer_commit("Reset transform");
         }
     }
 
     // ---- mesh renderer ----
-    if (auto* mr = w.try_get<MeshRendererComponent>(e)) {
-        bool remove = false;
+    if (auto* mr = w.try_get<MeshRendererComponent>(e); shown(mr, std::type_identity<MeshRendererComponent>{})) {
+        const MeshRendererComponent before = *mr;
+        bool                        remove = false;
         if (component_header("Mesh Renderer", &remove)) {
             const auto builtin_mesh = gameplay::builtin_mesh_from_id(mr->mesh);
             const char* preview     = builtin_mesh ? gameplay::builtin_mesh_name(*builtin_mesh) : "Asset";
@@ -148,7 +249,7 @@ void EditorApp::draw_inspector() {
                     const auto m = static_cast<gameplay::BuiltinMesh>(i);
                     if (ImGui::Selectable(gameplay::builtin_mesh_name(m), builtin_mesh == m)) {
                         mr->mesh = gameplay::builtin_mesh_id(m);
-                        record_edit("Mesh");
+                        defer_commit("Mesh");
                     }
                 }
                 ImGui::EndCombo();
@@ -157,35 +258,56 @@ void EditorApp::draw_inspector() {
                 ImGui::TextDisabled("mesh %s", asset_label(mr->mesh).c_str());
             }
             const auto  builtin_mat = gameplay::builtin_material_from_id(mr->material);
-            const char* mat_preview = builtin_mat ? gameplay::builtin_material_name(*builtin_mat)
-                                      : mr->material.is_valid() ? "Asset" : "(default)";
+            const char* mat_preview = builtin_mat                              ? gameplay::builtin_material_name(*builtin_mat)
+                                      : is_material_instance_id(mr->material) ? "Instance"
+                                      : mr->material.is_valid()               ? "Asset"
+                                                                              : "(default)";
             if (ImGui::BeginCombo("Material", mat_preview)) {
                 for (u8 i = 0; i < static_cast<u8>(gameplay::BuiltinMaterial::Count); ++i) {
                     const auto m = static_cast<gameplay::BuiltinMaterial>(i);
                     if (ImGui::Selectable(gameplay::builtin_material_name(m), builtin_mat == m)) {
                         mr->material = gameplay::builtin_material_id(m);
-                        record_edit("Material");
+                        defer_commit("Material");
                     }
                 }
                 ImGui::EndCombo();
             }
-            if (mr->material.is_valid() && !builtin_mat) {
+            if (mr->material.is_valid() && !builtin_mat && !is_material_instance_id(mr->material)) {
                 ImGui::TextDisabled("material %s", asset_label(mr->material).c_str());
+            }
+            ImGui::SameLine();
+            if (ImGui::SmallButton("Edit...")) {
+                show_material_ = true;
+                ImGui::SetWindowFocus("Material");
             }
             with("Cast shadows").toggle(ImGui::Checkbox("Cast shadows", &mr->cast_shadows));
             if (const auto* mo = w.try_get<gameplay::MaterialOverridesComponent>(e)) {
                 ImGui::TextDisabled("%zu per-slot material overrides", mo->materials.size());
             }
         }
+        if (multi) {
+            propagate_fields(w, before, *mr, others, &MeshRendererComponent::mesh, &MeshRendererComponent::material,
+                      &MeshRendererComponent::cast_shadows);
+        }
+        // Picking a non-instance material replaces the entity's primary material instance.
+        if (!(before.material == mr->material) && !is_material_instance_id(mr->material)) {
+            for (const Entity x : sel) {
+                const auto* mi = w.try_get<MaterialInstanceComponent>(x);
+                if (mi != nullptr && mi->find(kPrimaryMaterialSlot) != nullptr) {
+                    remove_material_instance(w, x, kPrimaryMaterialSlot, mr->material);
+                }
+            }
+        }
         if (remove) {
-            w.remove<MeshRendererComponent>(e);
-            record_edit("Remove Mesh Renderer");
+            remove_all<MeshRendererComponent>(w, sel);
+            defer_commit("Remove Mesh Renderer");
         }
     }
 
     // ---- light ----
-    if (auto* l = w.try_get<LightComponent>(e)) {
-        bool remove = false;
+    if (auto* l = w.try_get<LightComponent>(e); shown(l, std::type_identity<LightComponent>{})) {
+        const LightComponent before = *l;
+        bool                 remove = false;
         if (component_header("Light", &remove)) {
             int kind = static_cast<int>(l->kind);
             if (with("Light kind").toggle(ImGui::Combo("Kind", &kind, "Directional\0Point\0Spot\0"))) {
@@ -202,42 +324,58 @@ void EditorApp::draw_inspector() {
             }
             with("Light shadows").toggle(ImGui::Checkbox("Cast shadows##light", &l->cast_shadows));
         }
+        if (multi) {
+            propagate_fields(w, before, *l, others, &LightComponent::kind, &LightComponent::color, &LightComponent::intensity,
+                      &LightComponent::range, &LightComponent::inner_cone_deg, &LightComponent::outer_cone_deg,
+                      &LightComponent::cast_shadows);
+        }
         if (remove) {
-            w.remove<LightComponent>(e);
-            record_edit("Remove Light");
+            remove_all<LightComponent>(w, sel);
+            defer_commit("Remove Light");
         }
     }
 
     // ---- camera ----
-    if (auto* c = w.try_get<CameraComponent>(e)) {
-        bool remove = false;
+    if (auto* c = w.try_get<CameraComponent>(e); shown(c, std::type_identity<CameraComponent>{})) {
+        const CameraComponent before = *c;
+        bool                  remove = false;
         if (component_header("Camera", &remove)) {
             with("Camera FOV").drag(ImGui::DragFloat("FOV", &c->fov_y_deg, 0.2f, 5.0f, 170.0f));
             with("Camera near").drag(ImGui::DragFloat("Near", &c->near_z, 0.01f, 0.001f, 100.0f));
             with("Camera far").drag(ImGui::DragFloat("Far", &c->far_z, 1.0f, 1.0f, 100000.0f));
             with("Primary camera").toggle(ImGui::Checkbox("Primary", &c->primary));
         }
+        if (multi) {
+            propagate_fields(w, before, *c, others, &CameraComponent::fov_y_deg, &CameraComponent::near_z, &CameraComponent::far_z,
+                      &CameraComponent::primary);
+        }
         if (remove) {
-            w.remove<CameraComponent>(e);
-            record_edit("Remove Camera");
+            remove_all<CameraComponent>(w, sel);
+            defer_commit("Remove Camera");
         }
     }
-    if (auto* fc = w.try_get<gameplay::FlyCameraComponent>(e)) {
-        bool remove = false;
+    if (auto* fc = w.try_get<gameplay::FlyCameraComponent>(e); shown(fc, std::type_identity<gameplay::FlyCameraComponent>{})) {
+        const gameplay::FlyCameraComponent before = *fc;
+        bool                               remove = false;
         if (component_header("Fly Camera Controller", &remove, false)) {
             with("Fly speed").drag(ImGui::DragFloat("Move speed", &fc->move_speed, 0.1f, 0.01f, 500.0f));
             with("Fly boost").drag(ImGui::DragFloat("Boost", &fc->boost_multiplier, 0.05f, 1.0f, 50.0f));
             with("Fly look").toggle(ImGui::Checkbox("Require look button", &fc->require_look_button));
         }
+        if (multi) {
+            propagate_fields(w, before, *fc, others, &gameplay::FlyCameraComponent::move_speed,
+                      &gameplay::FlyCameraComponent::boost_multiplier, &gameplay::FlyCameraComponent::require_look_button);
+        }
         if (remove) {
-            w.remove<gameplay::FlyCameraComponent>(e);
-            record_edit("Remove Fly Camera");
+            remove_all<gameplay::FlyCameraComponent>(w, sel);
+            defer_commit("Remove Fly Camera");
         }
     }
 
     // ---- physics ----
-    if (auto* rb = w.try_get<RigidBodyComponent>(e)) {
-        bool remove = false;
+    if (auto* rb = w.try_get<RigidBodyComponent>(e); shown(rb, std::type_identity<RigidBodyComponent>{})) {
+        const RigidBodyComponent before = *rb;
+        bool                     remove = false;
         if (component_header("Rigid Body", &remove)) {
             bool changed = false;
             int  motion  = static_cast<int>(rb->motion_type);
@@ -258,13 +396,21 @@ void EditorApp::draw_inspector() {
                 reg.patch<RigidBodyComponent>(e);
             }
         }
+        if (multi && propagate_fields(w, before, *rb, others, &RigidBodyComponent::motion_type, &RigidBodyComponent::mass,
+                               &RigidBodyComponent::friction, &RigidBodyComponent::restitution,
+                               &RigidBodyComponent::linear_damping, &RigidBodyComponent::angular_damping,
+                               &RigidBodyComponent::gravity_factor, &RigidBodyComponent::is_sensor,
+                               &RigidBodyComponent::continuous_collision, &RigidBodyComponent::allow_sleeping)) {
+            patch_all<RigidBodyComponent>(w, others);
+        }
         if (remove) {
-            w.remove<RigidBodyComponent>(e);
-            record_edit("Remove Rigid Body");
+            remove_all<RigidBodyComponent>(w, sel);
+            defer_commit("Remove Rigid Body");
         }
     }
-    if (auto* col = w.try_get<ColliderComponent>(e)) {
-        bool remove = false;
+    if (auto* col = w.try_get<ColliderComponent>(e); shown(col, std::type_identity<ColliderComponent>{})) {
+        const ColliderComponent before = *col;
+        bool                    remove = false;
         if (component_header("Collider", &remove)) {
             bool changed = false;
             int  shape   = static_cast<int>(col->shape);
@@ -292,14 +438,14 @@ void EditorApp::draw_inspector() {
             default: break;
             }
             changed |= with("Collider offset").drag(ImGui::DragFloat3("Offset", &col->local_offset.x, 0.01f));
-            if (const auto* mr = w.try_get<MeshRendererComponent>(e); mr != nullptr && render_cache() != nullptr) {
+            if (const auto* mr = w.try_get<MeshRendererComponent>(e); mr != nullptr && render_cache() != nullptr && !multi) {
                 if (ImGui::SmallButton("Fit box to mesh")) {
                     if (const auto* mesh = render_cache()->mesh(mr->mesh)) {
                         col->shape        = ColliderShape::Box;
                         col->half_extents = glm::max(mesh->bounds.extent(), Vec3(0.005f));
                         col->local_offset = mesh->bounds.center();
                         changed           = true;
-                        record_edit("Fit collider");
+                        defer_commit("Fit collider");
                     }
                 }
             }
@@ -307,13 +453,18 @@ void EditorApp::draw_inspector() {
                 reg.patch<ColliderComponent>(e);
             }
         }
+        if (multi && propagate_fields(w, before, *col, others, &ColliderComponent::shape, &ColliderComponent::half_extents,
+                               &ColliderComponent::radius, &ColliderComponent::half_height, &ColliderComponent::local_offset)) {
+            patch_all<ColliderComponent>(w, others);
+        }
         if (remove) {
-            w.remove<ColliderComponent>(e);
-            record_edit("Remove Collider");
+            remove_all<ColliderComponent>(w, sel);
+            defer_commit("Remove Collider");
         }
     }
-    if (auto* cc = w.try_get<CharacterControllerComponent>(e)) {
-        bool remove = false;
+    if (auto* cc = w.try_get<CharacterControllerComponent>(e); shown(cc, std::type_identity<CharacterControllerComponent>{})) {
+        const CharacterControllerComponent before = *cc;
+        bool                               remove = false;
         if (component_header("Character Controller", &remove)) {
             bool changed = false;
             changed |= with("Character").drag(ImGui::DragFloat("Radius##cc", &cc->radius, 0.01f, 0.01f, 10.0f));
@@ -329,14 +480,19 @@ void EditorApp::draw_inspector() {
                             cc->velocity.y, cc->velocity.z);
             }
         }
+        if (multi && propagate_fields(w, before, *cc, others, &CharacterControllerComponent::radius,
+                               &CharacterControllerComponent::half_height, &CharacterControllerComponent::max_slope_deg,
+                               &CharacterControllerComponent::step_up_height, &CharacterControllerComponent::jump_speed)) {
+            patch_all<CharacterControllerComponent>(w, others);
+        }
         if (remove) {
-            w.remove<CharacterControllerComponent>(e);
-            record_edit("Remove Character Controller");
+            remove_all<CharacterControllerComponent>(w, sel);
+            defer_commit("Remove Character Controller");
         }
     }
 
-    // ---- script ----
-    if (auto* sc = w.try_get<scripting::ScriptComponent>(e)) {
+    // ---- script (single selection) ----
+    if (auto* sc = w.try_get<scripting::ScriptComponent>(e); sc != nullptr && !multi) {
         bool remove = false;
         if (component_header("Script", &remove)) {
             bool changed = with("Script path").drag(input_text("Script", sc->script));
@@ -391,7 +547,7 @@ void EditorApp::draw_inspector() {
                                 if (const ImGuiPayload* pl = ImGui::AcceptDragDropPayload("AE_ENTITY_UUID")) {
                                     v       = scene::find_by_uuid(world(), *static_cast<const u64*>(pl->Data));
                                     changed = true;
-                                    record_edit("Script property");
+                                    defer_commit("Script property");
                                 }
                                 ImGui::EndDragDropTarget();
                             }
@@ -403,7 +559,7 @@ void EditorApp::draw_inspector() {
                 ImGui::SameLine();
                 if (ImGui::SmallButton("x")) {
                     sc->properties.erase(sc->properties.begin() + static_cast<std::ptrdiff_t>(i));
-                    record_edit("Remove script property");
+                    defer_commit("Remove script property");
                     changed = true;
                     ImGui::PopID();
                     break;
@@ -420,7 +576,7 @@ void EditorApp::draw_inspector() {
                         const std::string label = std::format("+ {}", d.name);
                         if (ImGui::SmallButton(label.c_str())) {
                             sc->set_property(d.name, d.value);
-                            record_edit("Override script property");
+                            defer_commit("Override script property");
                             changed = true;
                         }
                         ImGui::SameLine();
@@ -436,12 +592,12 @@ void EditorApp::draw_inspector() {
         }
         if (remove) {
             w.remove<scripting::ScriptComponent>(e);
-            record_edit("Remove Script");
+            defer_commit("Remove Script");
         }
     }
 
-    // ---- animator ----
-    if (auto* a = w.try_get<animation::AnimatorComponent>(e)) {
+    // ---- animator (single selection; graph view in the Animation panel) ----
+    if (auto* a = w.try_get<animation::AnimatorComponent>(e); a != nullptr && !multi) {
         bool remove = false;
         if (component_header("Animator", &remove)) {
             ImGui::Text("skeleton %s  (%s)", asset_label(a->skeleton_asset).c_str(),
@@ -459,49 +615,58 @@ void EditorApp::draw_inspector() {
         }
         if (remove) {
             w.remove<animation::AnimatorComponent>(e);
-            record_edit("Remove Animator");
+            defer_commit("Remove Animator");
         }
     }
+    if (multi) {
+        ImGui::TextDisabled("Components not shared by every selected entity are hidden.");
+    }
 
-    // ---- add component ----
+    // ---- add component (to every selected entity lacking it) ----
     ImGui::Separator();
-    if (ImGui::Button("Add Component", ImVec2(-1, 0))) {
+    if (ImGui::Button(multi ? "Add Component to Selection" : "Add Component", ImVec2(-1, 0))) {
         ImGui::OpenPopup("AddComponent");
     }
     if (ImGui::BeginPopup("AddComponent")) {
-        auto item = [&](const char* label, bool has, auto&& add) {
-            if (ImGui::MenuItem(label, nullptr, false, !has)) {
-                add();
-                record_edit("Add component");
+        auto item = [&]<class T>(const char* label, std::type_identity<T>, auto&& add) {
+            if (ImGui::MenuItem(label, nullptr, false, !all_have<T>(w, sel))) {
+                for (const Entity x : sel) {
+                    if (!w.has<T>(x)) {
+                        add(x);
+                    }
+                }
+                defer_commit("Add component");
             }
         };
-        item("Mesh Renderer", reg.all_of<MeshRendererComponent>(e), [&] {
+        item("Mesh Renderer", std::type_identity<MeshRendererComponent>{}, [&](Entity x) {
             MeshRendererComponent mr;
             mr.mesh     = gameplay::builtin_mesh_id(gameplay::BuiltinMesh::Cube);
             mr.material = gameplay::default_material_id();
-            w.add<MeshRendererComponent>(e, mr);
+            w.add<MeshRendererComponent>(x, mr);
         });
-        item("Light", reg.all_of<LightComponent>(e), [&] { w.add<LightComponent>(e); });
-        item("Camera", reg.all_of<CameraComponent>(e), [&] { w.add<CameraComponent>(e); });
-        item("Fly Camera Controller", reg.all_of<gameplay::FlyCameraComponent>(e), [&] { w.add<gameplay::FlyCameraComponent>(e); });
+        item("Light", std::type_identity<LightComponent>{}, [&](Entity x) { w.add<LightComponent>(x); });
+        item("Camera", std::type_identity<CameraComponent>{}, [&](Entity x) { w.add<CameraComponent>(x); });
+        item("Fly Camera Controller", std::type_identity<gameplay::FlyCameraComponent>{},
+             [&](Entity x) { w.add<gameplay::FlyCameraComponent>(x); });
         ImGui::Separator();
-        item("Rigid Body", reg.all_of<RigidBodyComponent>(e), [&] { w.add<RigidBodyComponent>(e); });
-        item("Collider", reg.all_of<ColliderComponent>(e), [&] {
+        item("Rigid Body", std::type_identity<RigidBodyComponent>{}, [&](Entity x) { w.add<RigidBodyComponent>(x); });
+        item("Collider", std::type_identity<ColliderComponent>{}, [&](Entity x) {
             ColliderComponent c;
-            if (const auto* mr = w.try_get<MeshRendererComponent>(e); mr != nullptr && render_cache() != nullptr) {
+            if (const auto* mr = w.try_get<MeshRendererComponent>(x); mr != nullptr && render_cache() != nullptr) {
                 if (const auto* mesh = render_cache()->mesh(mr->mesh)) {
                     c.half_extents = glm::max(mesh->bounds.extent(), Vec3(0.005f));
                     c.local_offset = mesh->bounds.center();
                 }
             }
-            w.add<ColliderComponent>(e, c);
+            w.add<ColliderComponent>(x, c);
         });
-        item("Character Controller", reg.all_of<CharacterControllerComponent>(e), [&] { w.add<CharacterControllerComponent>(e); });
+        item("Character Controller", std::type_identity<CharacterControllerComponent>{},
+             [&](Entity x) { w.add<CharacterControllerComponent>(x); });
         ImGui::Separator();
-        item("Script", reg.all_of<scripting::ScriptComponent>(e), [&] { w.add<scripting::ScriptComponent>(e); });
+        item("Script", std::type_identity<scripting::ScriptComponent>{}, [&](Entity x) { w.add<scripting::ScriptComponent>(x); });
         ImGui::EndPopup();
     }
-    ImGui::End();
+    finish();
 }
 
 } // namespace aether::editor

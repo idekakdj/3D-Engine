@@ -3,6 +3,8 @@
 
 #include "math_util.h"
 
+#include <mikktspace.h>
+
 #include <algorithm>
 #include <bit>
 #include <cmath>
@@ -126,49 +128,181 @@ void generate_flat_normals(std::vector<Vertex>&     vertices,
     if (has_skin) *skin = std::move(out_skin);
 }
 
+namespace {
+
+// ---------------------------------------------------------------------------
+// MikkTSpace adapter
+// ---------------------------------------------------------------------------
+struct CornerTangent {
+    Vec3 tangent{ 0.0f };
+    f32  sign = 1.0f;
+    bool set = false;
+};
+
+struct MikkMesh {
+    Span<const Vertex>         vertices;
+    std::vector<u32>           corners; // valid triangles only, 3 original vertex indices each
+    std::vector<CornerTangent> result;  // parallel to `corners`
+};
+
+const Vertex& mikk_vertex(const SMikkTSpaceContext* ctx, int face, int vert) {
+    const auto* m = static_cast<const MikkMesh*>(ctx->m_pUserData);
+    return m->vertices[m->corners[static_cast<usize>(face) * 3 + static_cast<usize>(vert)]];
+}
+
+int mikk_num_faces(const SMikkTSpaceContext* ctx) {
+    return static_cast<int>(static_cast<const MikkMesh*>(ctx->m_pUserData)->corners.size() / 3);
+}
+int mikk_num_face_vertices(const SMikkTSpaceContext*, const int) { return 3; }
+void mikk_position(const SMikkTSpaceContext* ctx, float out[], const int face, const int vert) {
+    const Vec3& p = mikk_vertex(ctx, face, vert).position;
+    out[0] = p.x;
+    out[1] = p.y;
+    out[2] = p.z;
+}
+void mikk_normal(const SMikkTSpaceContext* ctx, float out[], const int face, const int vert) {
+    const Vec3 n = detail::normalize_or(mikk_vertex(ctx, face, vert).normal, Vec3(0.0f, 1.0f, 0.0f));
+    out[0] = n.x;
+    out[1] = n.y;
+    out[2] = n.z;
+}
+void mikk_texcoord(const SMikkTSpaceContext* ctx, float out[], const int face, const int vert) {
+    const Vec2& uv = mikk_vertex(ctx, face, vert).uv0;
+    out[0] = uv.x;
+    out[1] = 1.0f - uv.y; // glTF top-left origin -> MikkTSpace bottom-left, as Blender's glTF exporter
+}
+void mikk_set_basic(const SMikkTSpaceContext* ctx, const float tangent[], const float sign, const int face,
+                    const int vert) {
+    auto*          m = static_cast<MikkMesh*>(ctx->m_pUserData);
+    CornerTangent& c = m->result[static_cast<usize>(face) * 3 + static_cast<usize>(vert)];
+    c.tangent = Vec3(tangent[0], tangent[1], tangent[2]);
+    c.sign = sign < 0.0f ? -1.0f : 1.0f;
+    c.set = true;
+}
+
+// Runs MikkTSpace over the in-range triangles; per-corner results land in the returned mesh.
+MikkMesh run_mikktspace(Span<const Vertex> vertices, Span<const u32> indices) {
+    MikkMesh mesh;
+    mesh.vertices = vertices;
+    mesh.corners.reserve(indices.size());
+    for (usize t = 0; t + 2 < indices.size(); t += 3) {
+        if (!triangle_in_range(indices, t, vertices.size())) continue;
+        mesh.corners.insert(mesh.corners.end(), { indices[t], indices[t + 1], indices[t + 2] });
+    }
+    mesh.result.resize(mesh.corners.size());
+    if (mesh.corners.empty()) return mesh;
+
+    SMikkTSpaceInterface iface{};
+    iface.m_getNumFaces = &mikk_num_faces;
+    iface.m_getNumVerticesOfFace = &mikk_num_face_vertices;
+    iface.m_getPosition = &mikk_position;
+    iface.m_getNormal = &mikk_normal;
+    iface.m_getTexCoord = &mikk_texcoord;
+    iface.m_setTSpaceBasic = &mikk_set_basic;
+    iface.m_setTSpace = nullptr;
+    SMikkTSpaceContext ctx{};
+    ctx.m_pInterface = &iface;
+    ctx.m_pUserData = &mesh;
+    if (!genTangSpaceDefault(&ctx)) {
+        for (CornerTangent& c : mesh.result) c.set = false; // allocation failure: use fallbacks
+    }
+    return mesh;
+}
+
+// A unit tangent perpendicular to the normal from a MikkTSpace result (or a fallback).
+Vec4 finish_tangent(const Vec3& raw_normal, const Vec3& tangent, f32 sign) {
+    const Vec3 normal = detail::normalize_or(raw_normal, Vec3(0.0f, 1.0f, 0.0f));
+    const Vec3 projected = tangent - normal * detail::dot(normal, tangent);
+    const f32  len = detail::length(projected);
+    if (len > 1e-6f && std::isfinite(len)) return Vec4(projected / len, sign);
+    return Vec4(detail::any_perpendicular(normal), 1.0f);
+}
+
+} // namespace
+
+u32 generate_tangents_mikktspace(std::vector<Vertex>&     vertices,
+                                 std::vector<u32>&        indices,
+                                 std::vector<SkinVertex>* skin) {
+    const usize n = vertices.size();
+    if (n == 0) return 0;
+    const bool     has_skin = skin != nullptr && skin->size() == n;
+    const MikkMesh mesh = run_mikktspace(vertices, indices);
+
+    // Per original vertex: the distinct MikkTSpace tangents of its corners and the vertex
+    // each one lives in (the first keeps the original index).
+    struct Variant {
+        Vec4 tangent;
+        u32  index;
+    };
+    std::vector<std::vector<Variant>> variants(n);
+    std::vector<u32>                  corner_index(mesh.corners.size());
+    for (usize c = 0; c < mesh.corners.size(); ++c) {
+        const u32            v = mesh.corners[c];
+        const CornerTangent& ct = mesh.result[c];
+        const Vec4 t = finish_tangent(vertices[v].normal, ct.set ? ct.tangent : Vec3(0.0f), ct.set ? ct.sign : 1.0f);
+        u32  target = v;
+        bool found = false;
+        for (const Variant& var : variants[v]) {
+            if (var.tangent == t) {
+                target = var.index;
+                found = true;
+                break;
+            }
+        }
+        if (!found) {
+            if (!variants[v].empty()) {
+                target = static_cast<u32>(vertices.size());
+                const Vertex copy = vertices[v];
+                vertices.push_back(copy);
+                if (has_skin) {
+                    const SkinVertex skin_copy = (*skin)[v];
+                    skin->push_back(skin_copy);
+                }
+            }
+            variants[v].push_back({ t, target });
+            vertices[target].tangent = t;
+        }
+        corner_index[c] = target;
+    }
+    // Vertices no valid triangle references still get a well-formed tangent.
+    for (usize v = 0; v < n; ++v) {
+        if (variants[v].empty()) vertices[v].tangent = finish_tangent(vertices[v].normal, Vec3(0.0f), 1.0f);
+    }
+    // Rewrite the index buffer (same traversal order as run_mikktspace; out-of-range
+    // triangles are left untouched).
+    usize c = 0;
+    for (usize t = 0; t + 2 < indices.size(); t += 3) {
+        if (indices[t] >= n || indices[t + 1] >= n || indices[t + 2] >= n) continue;
+        for (usize k = 0; k < 3; ++k) indices[t + k] = corner_index[c++];
+    }
+    return static_cast<u32>(vertices.size() - n);
+}
+
 void generate_tangents(Span<Vertex> vertices, Span<const u32> indices) {
     const usize n = vertices.size();
     if (n == 0) return;
-    std::vector<Vec3> tan_u(n, Vec3(0.0f)); // accumulated dP/du
-    std::vector<Vec3> tan_v(n, Vec3(0.0f)); // accumulated dP/d(-v) (image "up", see header)
+    const MikkMesh mesh = run_mikktspace(vertices, indices);
 
-    for (usize t = 0; t + 2 < indices.size(); t += 3) {
-        if (!triangle_in_range(indices, t, n)) continue;
-        const Vertex& v0 = vertices[indices[t]];
-        const Vertex& v1 = vertices[indices[t + 1]];
-        const Vertex& v2 = vertices[indices[t + 2]];
-        const Vec3 e1 = v1.position - v0.position;
-        const Vec3 e2 = v2.position - v0.position;
-        const f32  s1 = v1.uv0.x - v0.uv0.x;
-        const f32  s2 = v2.uv0.x - v0.uv0.x;
-        const f32  t1 = -(v1.uv0.y - v0.uv0.y); // flip v: top-left UV origin -> +Y-up normal maps
-        const f32  t2 = -(v2.uv0.y - v0.uv0.y);
-        const f32  det = s1 * t2 - s2 * t1;
-        if (!(std::fabs(det) > 1e-12f) || !std::isfinite(det)) continue; // degenerate UVs
-        const f32  inv = 1.0f / det;
-        const Vec3 sdir = (e1 * t2 - e2 * t1) * inv;
-        const Vec3 tdir = (e2 * s1 - e1 * s2) * inv;
-        if (!detail::is_finite(sdir) || !detail::is_finite(tdir)) continue;
-        for (usize k = 0; k < 3; ++k) {
-            tan_u[indices[t + k]] += sdir;
-            tan_v[indices[t + k]] += tdir;
+    // Without re-indexing, a vertex whose corners disagree takes the average tangent of its
+    // majority handedness.
+    std::vector<Vec3> sum_pos(n, Vec3(0.0f)), sum_neg(n, Vec3(0.0f));
+    std::vector<u32>  count_pos(n, 0), count_neg(n, 0);
+    for (usize c = 0; c < mesh.corners.size(); ++c) {
+        const CornerTangent& ct = mesh.result[c];
+        if (!ct.set) continue;
+        const u32 v = mesh.corners[c];
+        if (ct.sign < 0.0f) {
+            sum_neg[v] += ct.tangent;
+            ++count_neg[v];
+        } else {
+            sum_pos[v] += ct.tangent;
+            ++count_pos[v];
         }
     }
-
-    for (usize i = 0; i < n; ++i) {
-        const Vec3 normal = detail::normalize_or(vertices[i].normal, Vec3(0.0f, 1.0f, 0.0f));
-        // Gram-Schmidt: remove the normal component.
-        const Vec3 projected = tan_u[i] - normal * detail::dot(normal, tan_u[i]);
-        const f32  len = detail::length(projected);
-        Vec3       tangent;
-        f32        w = 1.0f;
-        if (len > 1e-6f * std::max(1.0f, detail::length(tan_u[i])) && std::isfinite(len)) {
-            tangent = projected / len;
-            w = detail::dot(detail::cross(normal, tangent), tan_v[i]) < 0.0f ? -1.0f : 1.0f;
-        } else {
-            tangent = detail::any_perpendicular(normal);
-        }
-        vertices[i].tangent = Vec4(tangent, w);
+    for (usize v = 0; v < n; ++v) {
+        const bool negative = count_neg[v] > count_pos[v];
+        vertices[v].tangent = finish_tangent(vertices[v].normal, negative ? sum_neg[v] : sum_pos[v],
+                                             negative ? -1.0f : 1.0f);
     }
 }
 

@@ -87,7 +87,10 @@ struct DepthState {
     bool      clamp_enable = false; // depth clamp (shadow pancaking); gated on device support
 };
 
-struct VertexAttribute { u32 location; u32 offset; Format format; };
+// ADR-0009 (additive): `binding` selects the VertexBinding the attribute is sourced from.
+// If no declared VertexBinding has that number, the attribute falls back to the first
+// declared binding (the pre-M2 behaviour, so single-binding layouts need not set it).
+struct VertexAttribute { u32 location; u32 offset; Format format; u32 binding = 0; };
 struct VertexBinding    { u32 binding; u32 stride; bool per_instance = false; };
 
 struct GraphicsPipelineDesc {

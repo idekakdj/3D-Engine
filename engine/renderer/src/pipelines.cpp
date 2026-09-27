@@ -22,9 +22,8 @@ rhi::ShaderDefine def(std::string name, std::string value = "1") {
 
 void mesh_vertex_layout(rhi::GraphicsPipelineDesc& d) {
     // Binding 0: aether::Vertex (48 bytes). Skinned meshes fetch their SkinVertex stream
-    // through a buffer device address indexed by gl_VertexIndex (see mesh.vert): the
-    // frozen rhi::VertexAttribute has no binding index, so a second binding would be
-    // ambiguous.
+    // through a buffer device address indexed by gl_VertexIndex (see mesh.vert), which keeps
+    // one vertex layout (and one vertex-buffer bind) for every mesh permutation.
     d.vertex_bindings = { rhi::VertexBinding{ 0, 48, false } };
     d.vertex_attributes = {
         rhi::VertexAttribute{ 0, 0, rhi::Format::RGB32F },   // position
@@ -85,6 +84,13 @@ PipelineSpec mesh_spec(MeshPass pass, bool skinned, bool masked, bool double_sid
         g.targets.color = { kHdrFormat };
         g.targets.depth = kDepthFormat;
         break;
+    case MeshPass::Pick:
+        pass_name = "Pick";
+        s.fs = { "renderer/pick_id.frag", rhi::ShaderStage::Fragment, {} };
+        g.depth = rhi::DepthState{ true, false, rhi::CompareOp::Equal, false, false };
+        g.targets.color = { kPickIdFormat };
+        g.targets.depth = kDepthFormat;
+        break;
     case MeshPass::Overdraw:
         pass_name = "Overdraw";
         s.fs = { "renderer/overdraw.frag", rhi::ShaderStage::Fragment, {} };
@@ -141,6 +147,7 @@ u32 mesh_pipeline_index(MeshPass pass, bool skinned, bool masked, bool double_si
     case MeshPass::Forward: return 16u + sk * 2u + ds;
     case MeshPass::Translucent: return 20u + sk * 2u + ds;
     case MeshPass::Overdraw: return 24u + sk;
+    case MeshPass::Pick: return 26u + sk * 2u + ds;
     }
     return 0;
 }
@@ -152,6 +159,7 @@ std::vector<rhi::ShaderDefine> shared_shader_defines() {
         def("AE_CLUSTER_Z", std::to_string(kClusterZ)),
         def("AE_MAX_LIGHTS_PER_CLUSTER", std::to_string(kMaxLightsPerCluster)),
         def("AE_MAX_CASCADES", std::to_string(kMaxCascades)),
+        def("AE_MAX_DRAW_BATCHES", std::to_string(kMaxDrawBatches)),
     };
 }
 
@@ -171,6 +179,9 @@ std::vector<PipelineSpec> build_pipeline_specs(const rhi::DeviceFeatures& featur
         }
         specs[mesh_pipeline_index(MeshPass::Overdraw, sk, false, false)] =
             mesh_spec(MeshPass::Overdraw, sk, false, false, features);
+        for (const bool ds : { false, true }) {
+            specs[mesh_pipeline_index(MeshPass::Pick, sk, false, ds)] = mesh_spec(MeshPass::Pick, sk, false, ds, features);
+        }
     }
 
     {
@@ -197,6 +208,9 @@ std::vector<PipelineSpec> build_pipeline_specs(const rhi::DeviceFeatures& featur
     specs[pipeline_index(PipelineId::Irradiance)] = compute_spec("IBL.Irradiance", "renderer/irradiance.comp");
     specs[pipeline_index(PipelineId::Prefilter)] = compute_spec("IBL.Prefilter", "renderer/prefilter.comp");
     specs[pipeline_index(PipelineId::BrdfLut)] = compute_spec("IBL.BrdfLut", "renderer/brdf_lut.comp");
+    specs[pipeline_index(PipelineId::GpuCull)] = compute_spec("GpuCull", "renderer/gpu_cull.comp");
+    specs[pipeline_index(PipelineId::HiZBuild)] = compute_spec("HiZ.Build", "renderer/hiz_build.comp");
+    specs[pipeline_index(PipelineId::PickResolve)] = compute_spec("Pick.Resolve", "renderer/pick_resolve.comp");
     {
         PipelineSpec s;
         s.name = "Tonemap";

@@ -13,6 +13,21 @@ namespace aether::renderer {
     return f == rhi::Format::D32F || f == rhi::Format::D24UnormS8 || f == rhi::Format::D32FS8;
 }
 
+// Formats the render graph samples with a point sampler (depth, R32F Hi-Z, integer ids).
+[[nodiscard]] constexpr bool needs_point_sampler(rhi::Format f) noexcept {
+    switch (f) {
+    case rhi::Format::R32F:
+    case rhi::Format::RG32F:
+    case rhi::Format::RGBA32F:
+    case rhi::Format::R32Uint:
+    case rhi::Format::RG32Uint:
+    case rhi::Format::RGBA32Uint:
+        return true;
+    default:
+        return is_depth_format(f);
+    }
+}
+
 // ADR-0002 encoding rule: *Unorm targets get the sRGB OETF in-shader, *Srgb targets are
 // encoded by the hardware, everything else (float) receives linear values.
 [[nodiscard]] constexpr bool is_unorm_color_format(rhi::Format f) noexcept {
@@ -64,6 +79,52 @@ namespace aether::renderer {
     case rhi::Format::D32FS8: return 8;
     default: return 0;
     }
+}
+
+[[nodiscard]] constexpr bool is_block_compressed(rhi::Format f) noexcept {
+    switch (f) {
+    case rhi::Format::BC1Srgb:
+    case rhi::Format::BC3Srgb:
+    case rhi::Format::BC5Unorm:
+    case rhi::Format::BC7Srgb:
+    case rhi::Format::BC7Unorm:
+        return true;
+    default:
+        return false;
+    }
+}
+
+// Bytes per 4x4 block for BCn formats (0 otherwise).
+[[nodiscard]] constexpr u32 bytes_per_block(rhi::Format f) noexcept {
+    switch (f) {
+    case rhi::Format::BC1Srgb: return 8;
+    case rhi::Format::BC3Srgb:
+    case rhi::Format::BC5Unorm:
+    case rhi::Format::BC7Srgb:
+    case rhi::Format::BC7Unorm: return 16;
+    default: return 0;
+    }
+}
+
+// Tightly packed bytes of one 2D subresource (BCn: whole 4x4 blocks, partial blocks rounded up).
+[[nodiscard]] constexpr u64 subresource_size(rhi::Format f, u32 width, u32 height) noexcept {
+    if (is_block_compressed(f)) {
+        return ((static_cast<u64>(width) + 3) / 4) * ((static_cast<u64>(height) + 3) / 4) * bytes_per_block(f);
+    }
+    return static_cast<u64>(width) * height * bytes_per_texel(f);
+}
+
+// Bytes of a TextureUpload payload: mips [0, mips) of `layers` layers, layer-major within each
+// mip (all layers of mip 0, then all layers of mip 1, ...). Mip extents halve down to 1.
+[[nodiscard]] constexpr u64 texture_upload_size(rhi::Format f, u32 width, u32 height, u32 layers,
+                                                u32 mips) noexcept {
+    u64 total = 0;
+    for (u32 m = 0; m < mips; ++m) {
+        const u32 w = (width >> m) > 0 ? (width >> m) : 1u;
+        const u32 h = (height >> m) > 0 ? (height >> m) : 1u;
+        total += subresource_size(f, w, h) * layers;
+    }
+    return total;
 }
 
 // Full mip chain length for a 2D extent.

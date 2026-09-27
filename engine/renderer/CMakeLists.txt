@@ -25,7 +25,9 @@ aether_add_test(renderer
     tests/math_tests.cpp
     tests/resource_tests.cpp
     tests/shader_tests.cpp
-    tests/renderer_mock_tests.cpp)
+    tests/renderer_mock_tests.cpp
+    tests/texture_tests.cpp
+    tests/gpu_driven_tests.cpp)
 
 if(TARGET test.renderer)
     # Tests exercise private implementation headers (render graph, culling, ...).

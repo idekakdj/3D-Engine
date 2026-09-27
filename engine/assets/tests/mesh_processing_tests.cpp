@@ -101,6 +101,59 @@ TEST_CASE("mesh_processing: tangents follow +u, bitangent follows image-up (-v)"
     }
 }
 
+TEST_CASE("mesh_processing: MikkTSpace splits mirrored-UV seams") {
+    // Two quads side by side sharing the middle edge (vertices 1 and 4). The right quad's u is
+    // mirrored (1 -> 0 left to right), so the shared vertices have the same UV on both sides
+    // but opposite tangent handedness: MikkTSpace must give them one tangent per side.
+    std::vector<Vertex> v{ vtx({ 0, 0, 0 }, { 0, 1 }), vtx({ 1, 0, 0 }, { 1, 1 }), vtx({ 2, 0, 0 }, { 0, 1 }),
+                           vtx({ 0, 1, 0 }, { 0, 0 }), vtx({ 1, 1, 0 }, { 1, 0 }), vtx({ 2, 1, 0 }, { 0, 0 }) };
+    std::vector<u32> idx{ 0, 1, 4, 0, 4, 3,   // left quad
+                          1, 2, 5, 1, 5, 4 }; // right quad (mirrored u)
+    std::vector<SkinVertex> skin(6);
+    skin[1].joints[0] = 3;
+    skin[4].joints[0] = 5;
+    generate_smooth_normals(v, idx);
+
+    std::vector<Vertex> unsplit = v;
+    generate_tangents(unsplit, idx); // fixed vertex count variant still yields valid frames
+    for (const Vertex& x : unsplit) {
+        CHECK(std::fabs(glm::length(Vec3(x.tangent)) - 1.0f) < 1e-5f);
+        CHECK(std::fabs(x.tangent.w) == 1.0f);
+    }
+
+    const u32 added = generate_tangents_mikktspace(v, idx, &skin);
+    CHECK(added == 2); // the two seam vertices are split
+    REQUIRE(v.size() == 8);
+    REQUIRE(skin.size() == 8);
+    CHECK(skin[6].joints[0] + skin[7].joints[0] == 8); // copies carry their skin (3 and 5)
+    for (usize t = 0; t < idx.size(); ++t) {
+        const Vertex& x = v[idx[t]];
+        const bool    left = t < 6;
+        INFO("corner ", t);
+        CHECK(near(Vec3(x.tangent), left ? Vec3(1, 0, 0) : Vec3(-1, 0, 0)));
+        CHECK(x.tangent.w == (left ? 1.0f : -1.0f));
+        const Vec3 bitangent = glm::cross(x.normal, Vec3(x.tangent)) * x.tangent.w;
+        CHECK(near(bitangent, { 0, 1, 0 })); // image-up == +y on both sides
+    }
+    for (const Vertex& x : v) {
+        CHECK(std::fabs(glm::length(Vec3(x.tangent)) - 1.0f) < 1e-5f);
+        CHECK(std::fabs(glm::dot(Vec3(x.tangent), x.normal)) < 1e-5f);
+    }
+    // Geometry is unchanged: the split vertices duplicate positions/UVs.
+    CHECK(near(v[idx[6]].position, { 1, 0, 0 }));
+    CHECK(idx[0] == 0);
+
+    // A seamless mesh is not split and matches the fixed-count variant exactly.
+    auto a = quad();
+    generate_smooth_normals(a, kQuadIndices);
+    auto             b = a;
+    std::vector<u32> bi = kQuadIndices;
+    generate_tangents(a, kQuadIndices);
+    CHECK(generate_tangents_mikktspace(b, bi) == 0);
+    CHECK(bi == kQuadIndices);
+    for (usize i = 0; i < a.size(); ++i) CHECK(a[i].tangent == b[i].tangent);
+}
+
 TEST_CASE("mesh_processing: skin weight normalisation") {
     SkinVertex s;
     s.weights = Vec4(2.0f, 1.0f, 1.0f, 0.0f);

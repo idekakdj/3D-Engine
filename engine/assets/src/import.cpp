@@ -18,12 +18,21 @@ constexpr std::array<StringView, 9> kImageExtensions{ ".png", ".jpg", ".jpeg", "
 } // namespace
 
 u64 ImportSettings::fingerprint() const noexcept {
-    const std::array<u8, 6> bits{
+    const std::array<u8, 9> bits{
         static_cast<u8>(generate_normals),  static_cast<u8>(normal_generation),
         static_cast<u8>(generate_tangents), static_cast<u8>(import_textures),
-        static_cast<u8>(image_color_space), u8{ 1 } /* layout version of this fingerprint */
+        static_cast<u8>(image_color_space), static_cast<u8>(generate_mips || compress_textures),
+        static_cast<u8>(compress_textures), static_cast<u8>(mip_filter),
+        u8{ 2 } /* layout version of this fingerprint */
     };
     return fnv1a64(ByteSpan(reinterpret_cast<const byte*>(bits.data()), bits.size()));
+}
+
+ImportSettings ImportSettings::cooking() noexcept {
+    ImportSettings s;
+    s.generate_mips = true;
+    s.compress_textures = true;
+    return s;
 }
 
 bool is_image_source(const fs::path& path) {

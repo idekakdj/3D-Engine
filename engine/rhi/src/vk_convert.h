@@ -36,6 +36,10 @@ VkImageAspectFlags sampled_aspect(Format f); // depth only for DS formats
 // Bytes per texel, or per 4x4 block for BC formats.
 u32 format_block_bytes(Format f);
 u32 format_block_dim(Format f); // 1, or 4 for BC formats
+// Source binding of a vertex attribute (ADR-0009): VertexAttribute::binding when that binding
+// is declared, else the first declared binding (pre-M2 behaviour). `declared` reports which.
+u32 vertex_attribute_binding(const GraphicsPipelineDesc& desc, const VertexAttribute& a,
+                             bool* declared = nullptr);
 // Tightly packed byte size of one subresource of the given extent.
 u64 subresource_bytes(Format f, u32 width, u32 height, u32 depth);
 

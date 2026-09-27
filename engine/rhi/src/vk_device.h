@@ -147,6 +147,7 @@ public:
     void  update_buffer(BufferHandle, ByteSpan data, u64 dst_offset) override;
     void* map(BufferHandle) override;
     void  unmap(BufferHandle) override;
+    void  invalidate_mapped(BufferHandle h) override { invalidate_host(h); }
     void  update_texture(TextureHandle, ByteSpan data, bool gen_mips) override;
     void  update_texture_mip(TextureHandle, u32 mip, u32 layer, ByteSpan data) override;
 

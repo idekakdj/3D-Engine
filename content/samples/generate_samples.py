@@ -21,6 +21,14 @@ Outputs (relative to this directory):
                            exercised. JOINTS_0 and WEIGHTS_0 are UNSIGNED_BYTE (weights
                            normalized). One looping animation "Wave" with a LINEAR rotation,
                            a STEP translation and a CUBICSPLINE scale channel.
+    props/props.gltf       ADR-0009 cook features: a cube "Base" with a smaller spinning cube
+                           "Spinner" as its child. The material's base-color and normal textures
+                           are EXTERNAL files that are also standalone sources (texture
+                           de-duplication; the normal map cooks to BC5, the albedo to BC7 sRGB,
+                           both with full mip chains). The "Spinner" faces use mirrored U on
+                           their right half (MikkTSpace seam splitting). One looping animation
+                           "Spin" rotates the non-joint node "Spinner" (node animation).
+    props/textures/panel_albedo.png, panel_normal.png   64x64 procedural tiles / bumps.
 
 Only the Python standard library is used (json, struct, zlib, base64, math).
 """
@@ -406,12 +414,133 @@ def build_skinned() -> dict:
     }
 
 
+# ---------------------------------------------------------------------------
+# Props (ADR-0009: dedup'd external textures, BC5 normal map, mirrored UVs, node animation)
+# ---------------------------------------------------------------------------
+PROPS_TEX = 64
+
+
+def panel_albedo_png() -> bytes:
+    px = []
+    for y in range(PROPS_TEX):
+        for x in range(PROPS_TEX):
+            if x % 16 == 0 or y % 16 == 0:
+                px.append((60, 60, 70, 255))  # grout
+            elif ((x // 16) + (y // 16)) % 2 == 0:
+                px.append((200, 70, 40, 255))
+            else:
+                px.append((230, 200, 140, 255))
+    return png_rgba(PROPS_TEX, PROPS_TEX, px)
+
+
+def panel_normal_png() -> bytes:
+    # One dome per 16x16 tile; +Y-up (OpenGL) tangent-space normals, xyz * 0.5 + 0.5.
+    px = []
+    for y in range(PROPS_TEX):
+        for x in range(PROPS_TEX):
+            ox = ((x % 16) + 0.5 - 8.0) / 6.0
+            oy = -((y % 16) + 0.5 - 8.0) / 6.0  # image up = +Y
+            d2 = ox * ox + oy * oy
+            if d2 < 1.0:
+                n = (ox * 0.7, oy * 0.7, math.sqrt(1.0 - d2))
+                inv = 1.0 / math.sqrt(n[0] ** 2 + n[1] ** 2 + n[2] ** 2)
+                n = (n[0] * inv, n[1] * inv, n[2] * inv)
+            else:
+                n = (0.0, 0.0, 1.0)
+            px.append(tuple(int(round((c * 0.5 + 0.5) * 255)) for c in n) + (255,))
+    return png_rgba(PROPS_TEX, PROPS_TEX, px)
+
+
+def quat_y(degrees: float) -> tuple[float, float, float, float]:
+    half = math.radians(degrees) * 0.5
+    return (0.0, math.sin(half), 0.0, math.cos(half))
+
+
+def mirrored_cube_geometry():
+    """Cube faces split into left/right halves; the right half mirrors U (1 -> 0), so the
+    middle column shares positions AND UVs but flips tangent handedness."""
+    positions, normals, uvs, indices = [], [], [], []
+    for n, r, u in CUBE_FACES:
+        base = len(positions)
+        # 6 vertices per face: bottom row x = -1, 0, 1 then top row.
+        for su, v in ((-1, 1.0), (1, 0.0)):
+            for sr, uu in ((-1, 0.0), (0, 1.0), (1, 0.0)):
+                p = tuple(0.5 * n[i] + 0.5 * sr * r[i] + 0.5 * su * u[i] for i in range(3))
+                positions.append(p)
+                normals.append(tuple(float(c) for c in n))
+                uvs.append((uu, v))
+        bl, bm, br, tl, tm, tr = range(base, base + 6)
+        indices += [bl, bm, tm, bl, tm, tl, bm, br, tr, bm, tr, tm]
+    return positions, normals, uvs, indices
+
+
+def build_props() -> dict:
+    b = BufferBuilder()
+    prims = []
+    for positions, normals, uvs, indices in (cube_geometry(), mirrored_cube_geometry()):
+        count = len(positions)
+        a_pos = b.add_accessor(f32s([c for p in positions for c in p]), FLOAT, count, "VEC3",
+                               ARRAY_BUFFER, minmax=vec_minmax(positions))
+        a_nrm = b.add_accessor(f32s([c for p in normals for c in p]), FLOAT, count, "VEC3", ARRAY_BUFFER)
+        a_uv = b.add_accessor(f32s([c for p in uvs for c in p]), FLOAT, count, "VEC2", ARRAY_BUFFER)
+        a_idx = b.add_accessor(struct.pack("<%dH" % len(indices), *indices), UNSIGNED_SHORT,
+                               len(indices), "SCALAR", ELEMENT_ARRAY_BUFFER)
+        prims.append({"attributes": {"POSITION": a_pos, "NORMAL": a_nrm, "TEXCOORD_0": a_uv},
+                      "indices": a_idx, "material": 0, "mode": 4})
+
+    spin_times = [0.0, 1.0, 2.0, 3.0]
+    spin_values = [quat_y(0), quat_y(120), quat_y(240), quat_y(360)]
+    a_t = b.add_accessor(f32s(spin_times), FLOAT, 4, "SCALAR", minmax=([0.0], [3.0]))
+    a_v = b.add_accessor(f32s([c for q in spin_values for c in q]), FLOAT, 4, "VEC4")
+    pad4(b.data)
+
+    return {
+        "asset": dict(ASSET),
+        "scene": 0,
+        "scenes": [{"name": "PropsScene", "nodes": [0]}],
+        "nodes": [
+            {"name": "Base", "mesh": 0, "children": [1]},
+            {"name": "Spinner", "mesh": 1, "translation": [0.0, 1.25, 0.0], "scale": [0.5, 0.5, 0.5]},
+        ],
+        "meshes": [{"name": "Base", "primitives": [prims[0]]},
+                   {"name": "Spinner", "primitives": [prims[1]]}],
+        "materials": [{
+            "name": "Panel",
+            "pbrMetallicRoughness": {"baseColorTexture": {"index": 0},
+                                     "metallicFactor": 0.0, "roughnessFactor": 0.6},
+            "normalTexture": {"index": 1, "scale": 1.0},
+        }],
+        "samplers": [{"magFilter": 9729, "minFilter": 9987, "wrapS": 10497, "wrapT": 10497}],
+        "textures": [{"sampler": 0, "source": 0}, {"sampler": 0, "source": 1}],
+        "images": [{"name": "PanelAlbedo", "uri": "textures/panel_albedo.png"},
+                   {"name": "PanelNormal", "uri": "textures/panel_normal.png"}],
+        "animations": [{
+            "name": "Spin",
+            "samplers": [{"input": a_t, "output": a_v, "interpolation": "LINEAR"}],
+            "channels": [{"sampler": 0, "target": {"node": 1, "path": "rotation"}}],
+        }],
+        "buffers": [{"byteLength": len(b.data),
+                     "uri": data_uri("application/octet-stream", bytes(b.data))}],
+        "bufferViews": b.buffer_views,
+        "accessors": b.accessors,
+    }
+
+
+def write_bytes(path: Path, data: bytes) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(data)
+    print("wrote", path.relative_to(HERE))
+
+
 def main() -> None:
     doc, _ = build_cube(binary=False)
     write_json(HERE / "cube" / "cube.gltf", doc)
     doc, bin_chunk = build_cube(binary=True)
     write_glb(HERE / "cube" / "cube.glb", doc, bin_chunk)
     write_json(HERE / "skinned" / "skinned.gltf", build_skinned())
+    write_json(HERE / "props" / "props.gltf", build_props())
+    write_bytes(HERE / "props" / "textures" / "panel_albedo.png", panel_albedo_png())
+    write_bytes(HERE / "props" / "textures" / "panel_normal.png", panel_normal_png())
 
 
 if __name__ == "__main__":

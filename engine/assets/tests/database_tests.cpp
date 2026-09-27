@@ -206,3 +206,103 @@ TEST_CASE("database: failed imports are reported and keep the previous cook") {
     CHECK(report.failed == 1);
     CHECK(db.import_source("missing.gltf").error.code == ErrorCode::NotFound);
 }
+
+TEST_CASE("database: size + mtime fast path skips hashing; the hash stays authoritative") {
+    TempDir content("fast_content");
+    TempDir cooked("fast_cooked");
+    copy_into(sample("cube/cube.gltf"), content / "cube.gltf");
+    AssetDatabase db;
+    REQUIRE(db.open(content.path(), cooked.path()).has_value());
+    REQUIRE(db.import_source("cube.gltf").status == ImportStatus::Imported);
+    REQUIRE(db.find_source("cube.gltf")->settings_fingerprint == db.import_settings().fingerprint());
+
+    // Unchanged stamps: up to date without hashing.
+    ImportOutcome oc = db.import_source("cube.gltf");
+    CHECK(oc.status == ImportStatus::UpToDate);
+    CHECK_FALSE(oc.hashed);
+
+    // Touched (mtime differs) but identical bytes: hashed, still up to date, stamps refreshed.
+    bump_mtime(content / "cube.gltf");
+    oc = db.import_source("cube.gltf");
+    CHECK(oc.status == ImportStatus::UpToDate);
+    CHECK(oc.hashed);
+    oc = db.import_source("cube.gltf");
+    CHECK(oc.status == ImportStatus::UpToDate);
+    CHECK_FALSE(oc.hashed);
+
+    // Real edit (size changes): re-imported.
+    append_text(content / "cube.gltf", "\n");
+    CHECK(db.import_source("cube.gltf").status == ImportStatus::Imported);
+
+    // The fingerprint is persisted, so a reopened database takes the fast path too...
+    REQUIRE(db.save().has_value());
+    {
+        AssetDatabase reopened;
+        REQUIRE(reopened.open(content.path(), cooked.path()).has_value());
+        const ScanReport r = reopened.scan(ScanOptions{ .parallel = false });
+        CHECK(r.up_to_date == 1);
+        CHECK(r.hashed == 0);
+    }
+    // ...but different import settings with identical stamps still re-import.
+    AssetDatabase cooking;
+    REQUIRE(cooking.open(content.path(), cooked.path(), ImportSettings::cooking()).has_value());
+    oc = cooking.import_source("cube.gltf");
+    CHECK(oc.status == ImportStatus::Imported);
+    auto tex = read_asset<TextureData>(cooking.cooked_file(*cooking.find("cube.gltf", "texture:0:srgb")));
+    REQUIRE(tex.has_value());
+    CHECK(tex->format == TextureFormat::BC7_SRGB);
+    CHECK(tex->mip_levels > 1);
+}
+
+TEST_CASE("database: a glTF image that is also a standalone source is cooked once") {
+    TempDir content("dedup_content");
+    TempDir cooked("dedup_cooked");
+    write_small_png(content / "tex/albedo.png");
+    write_small_png(content / "tex/rock_normal.png");
+    write_small_png(content / "tex/detail.png");
+    // Base colour + emissive -> albedo.png (shared), normal -> rock_normal.png (shared, BC5),
+    // metallic-roughness -> detail.png, whose standalone import is sRGB colour: a different
+    // variant, so the glTF keeps its own linear copy.
+    write_text(content / "model.gltf", R"({"asset":{"version":"2.0"},
+"images":[{"uri":"tex/albedo.png"},{"uri":"tex/rock_normal.png"},{"uri":"tex/detail.png"}],
+"textures":[{"source":0},{"source":1},{"source":2}],
+"materials":[{"name":"M","pbrMetallicRoughness":{"baseColorTexture":{"index":0},"metallicRoughnessTexture":{"index":2}},
+"normalTexture":{"index":1},"emissiveTexture":{"index":0}}]})");
+
+    AssetDatabase db;
+    REQUIRE(db.open(content.path(), cooked.path(), ImportSettings::cooking()).has_value());
+    // Importing just the glTF also imports the standalone images it references.
+    const ImportOutcome oc = db.import_source("model.gltf");
+    REQUIRE_MESSAGE(oc.status == ImportStatus::Imported, oc.error.message);
+    CHECK(db.find_source("tex/albedo.png").has_value());
+    CHECK(db.find_source("tex/rock_normal.png").has_value());
+    CHECK_FALSE(db.find_source("tex/detail.png").has_value()); // not referenced as a shared asset
+
+    const ScanReport report = db.scan(ScanOptions{ .parallel = false });
+    CHECK(report.sources_found == 4);
+    CHECK(report.failed == 0);
+
+    auto material = read_asset<MaterialData>(db.cooked_file(*db.find("model.gltf", "material:0")));
+    REQUIRE(material.has_value());
+    const AssetId albedo = make_asset_id("tex/albedo.png", "texture:0");
+    const AssetId normal = make_asset_id("tex/rock_normal.png", "texture:0");
+    CHECK(material->base_color_texture == albedo);
+    CHECK(material->emissive_texture == albedo);
+    CHECK(material->normal_texture == normal);
+    CHECK(material->metallic_roughness_texture == make_asset_id("model.gltf", "texture:2:linear"));
+
+    usize textures = 0;
+    for (const AssetRecord& r : db.all_assets()) textures += r.type == AssetType::Texture ? 1 : 0;
+    CHECK(textures == 4); // albedo, rock_normal, detail (standalone) + the glTF's linear copy
+    for (const AssetRecord& r : db.assets_of_source("model.gltf")) {
+        CHECK((r.type != AssetType::Texture || r.sub_key == "texture:2:linear"));
+    }
+
+    auto n = read_asset<TextureData>(db.cooked_file(*db.find(normal)));
+    REQUIRE(n.has_value());
+    CHECK(n->format == TextureFormat::BC5_UNORM);
+    CHECK(n->mip_levels == 2);
+    auto a = read_asset<TextureData>(db.cooked_file(*db.find(albedo)));
+    REQUIRE(a.has_value());
+    CHECK(a->format == TextureFormat::BC7_SRGB);
+}

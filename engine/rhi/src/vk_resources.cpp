@@ -425,16 +425,18 @@ PipelineHandle VulkanDevice::create_graphics_pipeline(const GraphicsPipelineDesc
     for (const VertexBinding& b : desc.vertex_bindings) {
         bindings.push_back({ b.binding, b.stride, b.per_instance ? VK_VERTEX_INPUT_RATE_INSTANCE : VK_VERTEX_INPUT_RATE_VERTEX });
     }
-    // The frozen VertexAttribute has no binding index: every attribute sources from the
-    // first declared binding (interleaved layouts, e.g. aether::Vertex).
-    if (desc.vertex_bindings.size() > 1) {
-        AE_LOG_WARN("RHI", "pipeline '{}': {} vertex bindings declared; attributes all read binding {}",
-                    desc.debug_name, desc.vertex_bindings.size(), desc.vertex_bindings[0].binding);
-    }
-    const u32 attribute_binding = desc.vertex_bindings.empty() ? 0u : desc.vertex_bindings[0].binding;
+    // VertexAttribute::binding (ADR-0009) names the source binding; an attribute whose
+    // binding is not declared falls back to the first declared binding (pre-M2 behaviour).
+    const u32 first_binding = desc.vertex_bindings.empty() ? 0u : desc.vertex_bindings[0].binding;
     std::vector<VkVertexInputAttributeDescription> attributes;
     for (const VertexAttribute& a : desc.vertex_attributes) {
-        attributes.push_back({ a.location, attribute_binding, to_vk(a.format), a.offset });
+        bool      declared = false;
+        const u32 binding  = vertex_attribute_binding(desc, a, &declared);
+        if (!declared && desc.vertex_bindings.size() > 1) {
+            AE_LOG_WARN("RHI", "pipeline '{}': attribute {} names undeclared binding {}; using binding {}",
+                        desc.debug_name, a.location, a.binding, first_binding);
+        }
+        attributes.push_back({ a.location, binding, to_vk(a.format), a.offset });
     }
     VkPipelineVertexInputStateCreateInfo vertex_input{ VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO };
     vertex_input.vertexBindingDescriptionCount   = static_cast<u32>(bindings.size());

@@ -13,6 +13,8 @@
 #include "aether/core/types.h"
 
 #include <array>
+#include <span>
+#include <vector>
 
 namespace aether::renderer {
 
@@ -100,6 +102,30 @@ struct Sphere {
 };
 [[nodiscard]] Sphere spot_bounding_sphere(const Vec3& apex, const Vec3& dir, f32 range,
                                           f32 cos_outer);
+
+// ---------------------------------------------------------------------------
+// Hi-Z occlusion (ADR-0009). CPU reference of hiz_build.comp + gpu_cull.comp::occluded().
+// Reverse-Z: nearer = LARGER depth; every Hi-Z texel stores the MIN (farthest) depth of the
+// depth pixels it covers, so "nearest < texel" proves the whole region hides the object.
+// ---------------------------------------------------------------------------
+// Mip 0 = largest power of two <= the depth extent (per axis); full chain down to 1x1.
+[[nodiscard]] UVec2 hiz_mip0_size(UVec2 depth_size);
+[[nodiscard]] u32   hiz_mip_count(UVec2 mip0);
+
+struct HiZPyramid {
+    std::vector<UVec2>            sizes;
+    std::vector<std::vector<f32>> levels; // row-major
+};
+[[nodiscard]] HiZPyramid build_hiz(std::span<const f32> depth, UVec2 depth_size);
+
+// Conservative test of the inclusive depth-pixel rectangle [px0, px1] whose nearest depth is
+// `nearest`: true only if every covered depth pixel is strictly nearer (larger) than it.
+[[nodiscard]] bool hiz_occluded(const HiZPyramid& hiz, UVec2 depth_size, UVec2 px0, UVec2 px1, f32 nearest);
+
+// Screen rectangle (inclusive depth pixels) + nearest reverse-Z depth of a world AABB under
+// `view_proj`. False if the box crosses the camera plane (no bounded rectangle).
+[[nodiscard]] bool project_aabb_rect(const Mat4& view_proj, const AABB& box, UVec2 viewport, UVec2& px0,
+                                     UVec2& px1, f32& nearest);
 
 // Physically based punctual-light distance attenuation (inverse square with a smooth
 // window reaching zero at `range`). Mirrors brdf.glsl::distance_attenuation.

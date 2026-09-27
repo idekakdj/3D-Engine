@@ -4,6 +4,19 @@
 // sampling, asset decode) is expressed as jobs. The M0 backend is a thread pool with
 // a wait-group counter; a fiber/task-graph upgrade can follow without API change.
 // Thread count is clamped to max(1, hardware_concurrency()-1).
+//
+// Behaviour (documented per ADR-0009; the implementation in job_system.cpp is authoritative):
+//   * Before initialize() / after shutdown() there is no pool: run() and parallel_for()
+//     execute inline on the calling thread (a counter passed in never becomes pending), so
+//     code written against jobs also works in tools and unit tests.
+//   * parallel_for() WITHOUT a counter blocks until every index has run (the caller helps
+//     execute jobs meanwhile). WITH a counter it returns immediately; wait(counter) joins.
+//     `fn` is copied into the jobs, so passing a temporary lambda is safe.
+//   * parallel_for() group_size == 0 selects an automatic grain (about 4 groups per worker).
+//   * shutdown() drains every queued job before joining: no job is dropped and every
+//     counter reaches zero.
+// Thread-safety: run/parallel_for/wait may be called from any thread, including from inside
+// a job; initialize/shutdown from the main thread only.
 #pragma once
 
 #include "aether/core/types.h"

@@ -25,6 +25,7 @@
 #include <array>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <span>
 #include <string>
 #include <vector>
@@ -52,6 +53,9 @@ public:
     void render(const RenderScene& scene, rhi::CommandList& cmd, const RenderTarget& target) override;
     void resize(UVec2 output_size) override;
     Result<void> reload_shaders() override;
+
+    void               request_pick(UVec2 pixel) override;
+    std::optional<u32> poll_pick() override;
 
     RendererSettings&    settings() override { return settings_; }
     const RendererStats& stats() const override { return stats_; }
@@ -125,12 +129,32 @@ private:
         u32  pipeline = 0;
         bool skin_arena = false;
         bool skinned = false; // skinned pipeline permutation
+        bool double_sided = false;
     };
     struct CascadeSetup {
         u32                                  count = 0;
         std::array<CascadeMatrices, kMaxCascades> matrices{};
         std::array<f32, kMaxCascades>        splits{};
         std::array<Frustum, kMaxCascades>    frusta{};
+    };
+
+    // GPU-driven opaque path state for the frame being recorded (ADR-0009).
+    struct GpuDrivenFrame {
+        bool active = false;    // opaque + masked instances are culled on the GPU
+        bool occlusion = false; // two-phase Hi-Z occlusion culling
+        u32  candidates = 0;
+        u32  cmd_capacity = 0;  // commands per phase region (power of two >= candidates)
+        std::array<u32, kMaxDrawBatches> batch_count{};
+        std::array<u32, kMaxDrawBatches> batch_offset{};
+        u64          candidates_gpu = 0;
+        u64          view_gpu = 0;
+        GpuCullView* view_cpu = nullptr; // Hi-Z index patched while the graph records
+    };
+    // One CPU readback block per frame slot (counter statistics + pick id).
+    struct ReadbackSlot {
+        bool pending = false;
+        bool gpu_stats = false;
+        bool pick = false;
     };
 
     // renderer_impl.cpp
@@ -146,7 +170,7 @@ private:
     // renderer_frame.cpp
     void setup_view(const RenderScene& scene);
     void setup_lights(const RenderScene& scene);
-    void resolve_instances(const RenderScene& scene, GpuInstance* gpu_instances);
+    void resolve_instances(const RenderScene& scene, GpuInstance* gpu_instances, u32* user_ids);
     void setup_cascades();
     void cull_cascades(const RenderScene& scene);
     void build_draw_lists(const RenderScene& scene);
@@ -157,6 +181,14 @@ private:
     void draw_items(rhi::CommandList& cmd, std::span<const DrawItem> items, MeshPush push,
                     bool count_stats);
     void build_graph(const RenderScene& scene, const RenderTarget& target);
+    // ADR-0009: GPU-driven culling, Hi-Z, picking readback.
+    [[nodiscard]] bool gpu_culling_supported() const;
+    void write_cull_data(GpuCullInstance* candidates, GpuCullView* view);
+    void collect_readbacks(u32 slot);
+    void ensure_visibility_buffer(u32 instances);
+    void ensure_readback_buffer();
+    void draw_gpu_batches(rhi::CommandList& cmd, MeshPass pass, rhi::BufferHandle draws,
+                          rhi::BufferHandle counters, MeshPush push, bool phase1, bool phase2);
 
     [[nodiscard]] bool shadows_active() const;
     [[nodiscard]] bool debug_view_active() const { return settings_.debug_view != DebugView::None; }
@@ -213,6 +245,25 @@ private:
     std::array<std::vector<DrawItem>, kMaxCascades> cascade_draws_;
     u64                           frame_gpu_address_ = 0;
     u32                           line_vertex_count_ = 0;
+    u32                           frame_slot_ = 0;
+    u32                           cpu_visible_ = 0; // instances drawn from CPU lists
+
+    // ---- GPU-driven path + picking (ADR-0009) ----
+    GpuDrivenFrame                 gpu_{};
+    std::vector<GpuCullInstance>   cull_candidates_;
+    rhi::BufferHandle              visibility_buffer_;  // u32 per frame instance, persistent
+    u32                            visibility_capacity_ = 0;
+    rhi::ResourceState             visibility_state_ = rhi::ResourceState::Undefined;
+    bool                           visibility_clear_ = true;
+    rhi::BufferHandle              readback_buffer_;    // GpuToCpu, kReadbackWords per slot
+    rhi::ResourceState             readback_state_ = rhi::ResourceState::Undefined;
+    std::vector<ReadbackSlot>      readback_slots_;
+    std::array<u32, 4>             gpu_stats_latched_{}; // frustum, occlusion, visible, triangles
+    std::optional<UVec2>           pending_pick_;        // RenderTarget pixel of the next render()
+    i32                            logged_cull_mode_ = -1;
+    bool                           pick_this_frame_ = false;
+    UVec2                          pick_pixel_{ 0 };     // internal-resolution pixel
+    std::optional<u32>             pick_result_;
 };
 
 } // namespace aether::renderer

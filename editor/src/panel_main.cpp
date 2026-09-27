@@ -2,6 +2,9 @@
 #include "editor_app.h"
 
 #include "aether/core/input.h"
+#include "aether/editor/prefab.h"
+#include "aether/scene/components.h"
+#include "aether/scene/hierarchy_utils.h"
 #include "aether/scene/world.h"
 
 #include <imgui.h> // before ImGuizmo.h, which does not include it
@@ -37,7 +40,9 @@ void EditorApp::draw_dockspace() {
     ImGui::DockBuilderDockWindow("Viewport", center);
     ImGui::DockBuilderDockWindow("Hierarchy", left);
     ImGui::DockBuilderDockWindow("Inspector", right);
+    ImGui::DockBuilderDockWindow("Material", right);
     ImGui::DockBuilderDockWindow("Engine", right_bottom);
+    ImGui::DockBuilderDockWindow("Animation", right_bottom);
     ImGui::DockBuilderDockWindow("Assets", bottom);
     ImGui::DockBuilderDockWindow("Console", bottom);
     ImGui::DockBuilderFinish(dock_id);
@@ -88,13 +93,35 @@ void EditorApp::draw_menu_bar() {
         ImGui::Separator();
         const bool has_sel = selected() != kNullEntity;
         if (ImGui::MenuItem("Duplicate", "Ctrl+D", false, has_sel)) {
-            duplicate_entity(selected());
+            duplicate_selection();
         }
         if (ImGui::MenuItem("Delete", "Del", false, has_sel)) {
-            delete_entity(selected());
+            delete_selection();
         }
         if (ImGui::MenuItem("Focus", "F", false, has_sel)) {
             focus(selected());
+        }
+        ImGui::Separator();
+        if (ImGui::MenuItem("Select All", "Ctrl+A")) {
+            std::vector<Entity> all;
+            scene::for_each_in_hierarchy(world(), [&](Entity e) { all.push_back(e); });
+            select_entities(all);
+        }
+        if (ImGui::MenuItem("Deselect", nullptr, false, has_sel)) {
+            select(kNullEntity);
+        }
+        ImGui::Separator();
+        if (ImGui::MenuItem("Create Prefab from Selection...", nullptr, false, has_sel && editing)) {
+            file_dialog_      = FileDialog::SavePrefab;
+            file_dialog_path_ = "prefabs/" + world().get<NameComponent>(selected()).name + ".aeprefab";
+        }
+        const Entity primary = selected();
+        const bool   instance = has_sel && world().has<PrefabInstanceComponent>(primary);
+        if (ImGui::MenuItem("Revert to Prefab", nullptr, false, instance && editing)) {
+            revert_prefab(primary);
+        }
+        if (ImGui::MenuItem("Apply to Prefab", nullptr, false, instance && editing)) {
+            apply_prefab(primary);
         }
         ImGui::EndMenu();
     }
@@ -117,6 +144,8 @@ void EditorApp::draw_menu_bar() {
     }
     if (ImGui::BeginMenu("View")) {
         ImGui::MenuItem("Assets", nullptr, &show_assets_);
+        ImGui::MenuItem("Material", nullptr, &show_material_);
+        ImGui::MenuItem("Animation", nullptr, &show_animation_);
         ImGui::MenuItem("Console", nullptr, &show_console_);
         ImGui::MenuItem("Engine stats", nullptr, &show_stats_);
         ImGui::Separator();
@@ -157,7 +186,35 @@ void EditorApp::draw_toolbar() {
     ImGui::SameLine();
     if (ImGui::Button(gizmo_local_ ? "Local" : "World")) gizmo_local_ = !gizmo_local_;
     ImGui::SameLine();
-    ImGui::Checkbox("Snap", &gizmo_snap_);
+    ImGui::SetNextItemWidth(80.0f);
+    int pivot = static_cast<int>(pivot_mode_);
+    if (ImGui::Combo("##pivot", &pivot, "Center\0Primary\0")) {
+        pivot_mode_ = static_cast<PivotMode>(pivot);
+    }
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("Group pivot: bounds centre of the selection, or the primary (last selected) entity");
+    }
+    // Grid + snapping (translate snap is absolute on the world grid; rotate / scale incremental).
+    auto snap_field = [](const char* id, bool* on, f32* step, f32 speed, f32 lo, f32 hi, const char* fmt, const char* tip) {
+        ImGui::SameLine();
+        ImGui::Checkbox(id, on);
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("%s", tip);
+        }
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(58.0f);
+        ImGui::PushID(id);
+        ImGui::DragFloat("##step", step, speed, lo, hi, fmt, ImGuiSliderFlags_AlwaysClamp);
+        ImGui::PopID();
+    };
+    ImGui::SameLine();
+    ImGui::Checkbox("Grid", &snap_.show_grid);
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(58.0f);
+    ImGui::DragFloat("##grid", &snap_.grid_spacing, 0.05f, 0.05f, 100.0f, "%.2fm", ImGuiSliderFlags_AlwaysClamp);
+    snap_field("Snap T", &snap_.translate, &snap_.translate_step, 0.01f, 0.01f, 100.0f, "%.2fm", "Translation snap (world grid)");
+    snap_field("Snap R", &snap_.rotate, &snap_.rotate_step, 0.5f, 0.5f, 180.0f, "%.0f deg", "Rotation snap increment");
+    snap_field("Snap S", &snap_.scale, &snap_.scale_step, 0.01f, 0.01f, 10.0f, "%.2f", "Scale snap increment");
 
     // Play controls, centred.
     const f32 controls_width = 230.0f;
@@ -209,14 +266,19 @@ void EditorApp::handle_shortcuts() {
         file_dialog_path_ = "scenes/untitled.aescene";
     }
     if (ctrl && ImGui::IsKeyPressed(ImGuiKey_D, false) && selected() != kNullEntity) {
-        duplicate_entity(selected());
+        duplicate_selection();
+    }
+    if (ctrl && ImGui::IsKeyPressed(ImGuiKey_A, false)) {
+        std::vector<Entity> all;
+        scene::for_each_in_hierarchy(world(), [&](Entity e) { all.push_back(e); });
+        select_entities(all);
     }
     if (ctrl && ImGui::IsKeyPressed(ImGuiKey_P, false)) {
         editing ? play() : stop();
     }
     if (!ctrl && !looking_) {
         if (ImGui::IsKeyPressed(ImGuiKey_Delete, false) && selected() != kNullEntity) {
-            delete_entity(selected());
+            delete_selection();
         }
         if (ImGui::IsKeyPressed(ImGuiKey_F, false) && selected() != kNullEntity) {
             focus(selected());
@@ -231,7 +293,8 @@ void EditorApp::draw_file_dialog() {
     if (file_dialog_ == FileDialog::None) {
         return;
     }
-    const char* title = file_dialog_ == FileDialog::Open ? "Open Scene" : "Save Scene As";
+    const bool  prefab = file_dialog_ == FileDialog::SavePrefab;
+    const char* title  = file_dialog_ == FileDialog::Open ? "Open Scene" : prefab ? "Create Prefab" : "Save Scene As";
     if (!ImGui::IsPopupOpen(title)) {
         ImGui::OpenPopup(title);
     }
@@ -245,12 +308,12 @@ void EditorApp::draw_file_dialog() {
         }
         const bool enter = ImGui::InputText("##path", buf, sizeof(buf), ImGuiInputTextFlags_EnterReturnsTrue);
         file_dialog_path_ = buf;
-        if (ImGui::Button(file_dialog_ == FileDialog::Open ? "Open" : "Save") || enter) {
+        if (ImGui::Button(file_dialog_ == FileDialog::Open ? "Open" : prefab ? "Create" : "Save") || enter) {
             std::filesystem::path p = file_dialog_path_;
             if (p.extension().empty()) {
-                p += ".aescene";
+                p += prefab ? std::string(kPrefabExtension) : std::string(".aescene");
             }
-            const bool ok = file_dialog_ == FileDialog::Open ? open_scene(p) : save_scene(p);
+            const bool ok = file_dialog_ == FileDialog::Open ? open_scene(p) : prefab ? create_prefab(p) : save_scene(p);
             if (ok) {
                 file_dialog_ = FileDialog::None;
                 ImGui::CloseCurrentPopup();

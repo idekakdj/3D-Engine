@@ -16,6 +16,7 @@
 #include "aether/rhi/device.h"
 
 #include <memory>
+#include <optional>
 #include <string>
 
 namespace aether::renderer {
@@ -39,6 +40,10 @@ struct TextureUpload {
     u32         array_layers = 1;  // 6 for cubemaps
     bool        cubemap = false;
     bool        generate_mips = true;
+    // ADR-0009 (additive): number of mips present in `pixels` (all layers of mip 0, then all
+    // layers of mip 1, ...; tightly packed, BCn in 4x4 blocks). > 1 disables generate_mips.
+    // Block-compressed formats (BC1/BC3/BC5/BC7) must supply every mip they want.
+    u32         mip_levels = 1;
     ByteSpan    pixels;            // mip 0, all layers, tightly packed
     std::string debug_name;
 };
@@ -106,6 +111,10 @@ struct RendererSettings {
     bool      ibl = true;
     bool      draw_debug_lines = true;
     bool      frustum_culling = true;
+    // ADR-0009 (additive): GPU-driven path (compute culling + indirect draws) and two-phase
+    // Hi-Z occlusion culling. Each falls back to the CPU path when unsupported/disabled.
+    bool      gpu_culling = true;
+    bool      occlusion_culling = true;
     DebugView debug_view = DebugView::None;
 };
 
@@ -116,6 +125,9 @@ struct RendererStats {
     u32 lights = 0;
     u32 triangles = 0;
     f64 cpu_record_ms = 0.0;
+    // ADR-0009 (additive): GPU-driven statistics (read back with a frames-in-flight delay).
+    u32 instances_gpu_frustum_culled = 0;
+    u32 instances_gpu_occlusion_culled = 0;
 };
 
 struct RendererDesc {
@@ -152,6 +164,13 @@ public:
 
     // Recompile all shaders from disk (hot reload). Keeps old pipelines on failure.
     virtual Result<void> reload_shaders() = 0;
+
+    // ---- picking (ADR-0009, additive; defaults keep existing implementations compiling) ----
+    // Request the RenderMeshInstance::user_id under `pixel` (render-extent pixels, top-left
+    // origin) of the NEXT render(). The result arrives asynchronously (frames-in-flight
+    // latency): poll_pick() returns it once, then std::nullopt. 0 = nothing pickable there.
+    virtual void               request_pick(UVec2 pixel) { (void)pixel; }
+    virtual std::optional<u32> poll_pick() { return std::nullopt; }
 
     virtual RendererSettings&    settings() = 0;
     virtual const RendererStats& stats() const = 0;

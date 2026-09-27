@@ -93,6 +93,12 @@ RendererImpl::~RendererImpl() {
     destroy_persistent(shadow_map_);
     destroy_persistent(history_[0]);
     destroy_persistent(history_[1]);
+    for (rhi::BufferHandle* b : { &visibility_buffer_, &readback_buffer_ }) {
+        if (b->is_valid()) {
+            device_.destroy(*b);
+        }
+        *b = {};
+    }
 
     graph_.reset();
     rg_pool_.reset();
@@ -252,19 +258,35 @@ void RendererImpl::release(MeshHandle h) {
 // Textures
 // ===========================================================================
 TextureHandle RendererImpl::register_texture(const TextureUpload& up) {
-    const bool format_ok = up.format == rhi::Format::RGBA8Srgb || up.format == rhi::Format::RGBA8Unorm ||
+    const bool bc = is_block_compressed(up.format);
+    const bool format_ok = bc || up.format == rhi::Format::RGBA8Srgb || up.format == rhi::Format::RGBA8Unorm ||
                            up.format == rhi::Format::RGBA16F || up.format == rhi::Format::RGBA32F;
     const u32 layers = up.cubemap ? 6u : std::max(1u, up.array_layers);
     if (!format_ok || up.width == 0 || up.height == 0 || (up.cubemap && up.array_layers != 6)) {
         AE_LOG_ERROR(kLogCat, "register_texture('{}'): unsupported format or size", up.debug_name);
         return {};
     }
-    const u64 expected = static_cast<u64>(up.width) * up.height * layers * bytes_per_texel(up.format);
-    if (up.pixels.size() != expected) {
-        AE_LOG_ERROR(kLogCat, "register_texture('{}'): {} bytes given, {} expected", up.debug_name,
-                     up.pixels.size(), expected);
+    if (bc && !device_.features().texture_compression_bc) {
+        AE_LOG_ERROR(kLogCat, "register_texture('{}'): the device does not support BC texture compression",
+                     up.debug_name);
         return {};
     }
+    const u32 max_mips = full_mip_count(up.width, up.height);
+    const u32 supplied = std::max(1u, up.mip_levels);
+    if (supplied > max_mips) {
+        AE_LOG_ERROR(kLogCat, "register_texture('{}'): {} mips supplied, a {}x{} chain has at most {}",
+                     up.debug_name, supplied, up.width, up.height, max_mips);
+        return {};
+    }
+    const u64 expected = texture_upload_size(up.format, up.width, up.height, layers, supplied);
+    if (up.pixels.size() != expected) {
+        AE_LOG_ERROR(kLogCat, "register_texture('{}'): {} bytes given, {} expected ({} mips x {} layers)",
+                     up.debug_name, up.pixels.size(), expected, supplied, layers);
+        return {};
+    }
+    // Pre-built chains (and every BCn texture) are uploaded as-is; only a single uncompressed
+    // mip is expanded on the GPU when generate_mips is set.
+    const bool generate = up.generate_mips && supplied == 1 && !bc;
     rhi::TextureDesc d;
     d.type = up.cubemap ? rhi::TextureType::Cube
                         : (layers > 1 ? rhi::TextureType::Tex2DArray : rhi::TextureType::Tex2D);
@@ -272,7 +294,7 @@ TextureHandle RendererImpl::register_texture(const TextureUpload& up) {
     d.width = up.width;
     d.height = up.height;
     d.array_layers = layers;
-    d.mip_levels = up.generate_mips ? full_mip_count(up.width, up.height) : 1u;
+    d.mip_levels = generate ? max_mips : supplied;
     d.usage = rhi::TextureUsage::Sampled | rhi::TextureUsage::TransferDst | rhi::TextureUsage::TransferSrc;
     d.debug_name = up.debug_name;
     TextureRecord rec;
@@ -281,7 +303,21 @@ TextureHandle RendererImpl::register_texture(const TextureUpload& up) {
         AE_LOG_ERROR(kLogCat, "register_texture('{}'): creation failed", up.debug_name);
         return {};
     }
-    device_.update_texture(rec.texture, up.pixels, up.generate_mips); // -> ShaderRead
+    if (supplied == 1) {
+        device_.update_texture(rec.texture, up.pixels, generate); // -> ShaderRead
+    } else {
+        // Layer-major within each mip (TextureUpload::mip_levels). Each call leaves its
+        // subresource in ShaderRead; the first one initialises the whole image.
+        u64 offset = 0;
+        for (u32 m = 0; m < supplied; ++m) {
+            const u64 bytes = subresource_size(up.format, std::max(1u, up.width >> m), std::max(1u, up.height >> m));
+            for (u32 l = 0; l < layers; ++l) {
+                device_.update_texture_mip(rec.texture, m, l, up.pixels.subspan(static_cast<usize>(offset),
+                                                                                static_cast<usize>(bytes)));
+                offset += bytes;
+            }
+        }
+    }
     rec.descriptor = device_.register_texture(rec.texture, up.cubemap ? linear_clamp_ : material_sampler_);
     const TextureHandle h = textures_.insert(rec);
     materials_dirty_ = true; // a material may have been waiting for this handle

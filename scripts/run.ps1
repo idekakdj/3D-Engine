@@ -5,8 +5,11 @@
 
 .EXAMPLE
   ./scripts/run.ps1 -Exe sandbox
-  ./scripts/run.ps1 -Preset wip-core-rhi -Exe sandbox -- --frames 300
+  ./scripts/run.ps1 -Preset wip-core-rhi -Exe sandbox --frames 300
   ./scripts/run.ps1 -Exe test.core
+
+  Pass executable arguments directly after -Exe <name> (no `--` separator: Windows
+  PowerShell 5.1 rejects a bare `--` with "parameter name '' is ambiguous").
 #>
 [CmdletBinding()]
 param(

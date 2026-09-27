@@ -1,0 +1,133 @@
+// shaders/renderer/gpu_cull.comp — GPU-driven instance culling (ADR-0009).
+// One thread per opaque/masked candidate. Visible candidates append a
+// VkDrawIndexedIndirectCommand (instanceCount 1, firstInstance = frame instance index, so
+// mesh.vert is shared with the CPU path) to their batch's slice of this phase's command array;
+// the per-batch counts feed vkCmdDrawIndexedIndirectCount.
+//   phase 0: frustum only (occlusion culling off)
+//   phase 1: frustum AND visible last frame (two-phase occlusion: draw last frame's set)
+//   phase 2: after the Hi-Z of phase 1: frustum AND not occluded AND not drawn in phase 1;
+//            rewrites the per-instance visibility for the next frame.
+// Reverse-Z everywhere: larger depth = nearer, and the Hi-Z stores the MIN (farthest) depth.
+#version 460
+#extension GL_GOOGLE_include_directive : require
+#include "common/bindless.glsl"
+#include "cull_data.glsl"
+
+layout(local_size_x = 64) in;
+
+layout(push_constant, scalar) uniform CullPush {
+    CullInstanceBuffer candidates;
+    CullViewBuffer     view;
+    DrawCommandBuffer  draws;      // this phase's command array
+    CounterBuffer      counts;     // this phase's per-batch counts
+    CounterBuffer      stats;      // counter buffer base
+    VisibilityBuffer   visibility; // per frame instance, previous frame
+    uint count;
+    uint phase;
+    uint pad0;
+    uint pad1;
+} pc;
+
+// Same conservative AABB-vs-planes test as the CPU path (render_math.cpp).
+bool frustum_visible(vec3 bmin, vec3 bmax) {
+    vec3 c = (bmin + bmax) * 0.5;
+    vec3 e = (bmax - bmin) * 0.5;
+    for (uint i = 0u; i < pc.view.plane_count; ++i) {
+        vec4  p = pc.view.planes[i];
+        float d = p.x * c.x + p.y * c.y + p.z * c.z + p.w;
+        float r = abs(p.x) * e.x + abs(p.y) * e.y + abs(p.z) * e.z;
+        if (d + r < 0.0) {
+            return false;
+        }
+    }
+    return true;
+}
+
+// Conservative Hi-Z test: occluded only if the box's NEAREST depth is farther than the
+// FARTHEST depth already in the depth buffer over every pixel the box can touch.
+bool occluded(vec3 bmin, vec3 bmax) {
+    vec2  mn = vec2(3.0e38);
+    vec2  mx = vec2(-3.0e38);
+    float nearest = 0.0;
+    for (uint k = 0u; k < 8u; ++k) {
+        vec3 corner = vec3((k & 1u) != 0u ? bmax.x : bmin.x, (k & 2u) != 0u ? bmax.y : bmin.y,
+                           (k & 4u) != 0u ? bmax.z : bmin.z);
+        vec4 clip = pc.view.view_proj * vec4(corner, 1.0);
+        if (clip.w <= 1e-5) {
+            return false; // crosses the camera plane: no bounded screen rectangle
+        }
+        vec3 ndc = clip.xyz / clip.w;
+        mn = min(mn, ndc.xy);
+        mx = max(mx, ndc.xy);
+        nearest = max(nearest, ndc.z);
+    }
+    if (nearest >= 1.0) {
+        return false;
+    }
+    vec2  vp  = pc.view.viewport;
+    vec2  uv0 = clamp(mn * 0.5 + 0.5, 0.0, 1.0);
+    vec2  uv1 = clamp(mx * 0.5 + 0.5, 0.0, 1.0);
+    uvec2 px0 = uvec2(min(floor(uv0 * vp), vp - 1.0));
+    uvec2 px1 = uvec2(min(floor(uv1 * vp), vp - 1.0));
+    uvec2 size0 = pc.view.hzb_size;
+    uvec2 vpu = uvec2(vp);
+    // Hi-Z mip-0 texel t covers depth pixels [t*vp/size0, ceil((t+1)*vp/size0)), so the
+    // texel floor(px*size0/vp) always contains pixel px.
+    uvec2 t0 = (px0 * size0) / vpu;
+    uvec2 t1 = (px1 * size0) / vpu;
+    uint  lvl = 0u;
+    while (lvl + 1u < pc.view.hzb_mips && any(greaterThan((t1 >> lvl) - (t0 >> lvl), uvec2(1u)))) {
+        ++lvl;
+    }
+    uvec2 lsize = max(size0 >> lvl, uvec2(1u));
+    uvec2 a = min(t0 >> lvl, lsize - 1u);
+    uvec2 b = min(t1 >> lvl, lsize - 1u);
+    float farthest = 1.0;
+    for (uint y = a.y; y <= b.y; ++y) {
+        for (uint x = a.x; x <= b.x; ++x) {
+            farthest = min(farthest, texelFetch(AE_TEX2D(pc.view.hzb_tex), ivec2(x, y), int(lvl)).r);
+        }
+    }
+    return nearest < farthest;
+}
+
+void main() {
+    uint i = gl_GlobalInvocationID.x;
+    if (i >= pc.count) {
+        return;
+    }
+    GpuCullInstance c = pc.candidates.items[i];
+    bool never = (c.flags & AE_CULL_NEVER_CULL) != 0u;
+    bool in_frustum = never || frustum_visible(c.aabb_min, c.aabb_max);
+
+    bool emit = false;
+    if (pc.phase == AE_CULL_PHASE_FRUSTUM) {
+        emit = in_frustum;
+    } else if (pc.phase == AE_CULL_PHASE_1) {
+        emit = in_frustum && pc.visibility.values[c.instance] != 0u;
+    } else {
+        bool drawn = in_frustum && pc.visibility.values[c.instance] != 0u; // drawn in phase 1
+        bool occ = in_frustum && !never && occluded(c.aabb_min, c.aabb_max);
+        bool vis = in_frustum && !occ;
+        emit = vis && !drawn;
+        pc.visibility.values[c.instance] = vis ? 1u : 0u;
+        if (occ && !drawn) {
+            atomicAdd(pc.stats.values[AE_COUNTER_OCCLUSION_CULLED], 1u);
+        }
+    }
+    if (!in_frustum && pc.phase != AE_CULL_PHASE_1) {
+        atomicAdd(pc.stats.values[AE_COUNTER_FRUSTUM_CULLED], 1u);
+    }
+    if (emit) {
+        uint slot = atomicAdd(pc.counts.values[c.batch], 1u);
+        GpuDrawCommand cmd;
+        cmd.index_count = c.index_count;
+        cmd.instance_count = 1u;
+        cmd.first_index = c.first_index;
+        cmd.vertex_offset = c.vertex_offset;
+        cmd.first_instance = c.instance;
+        pc.draws.cmds[pc.view.batch_offset[c.batch] + slot] = cmd;
+        atomicAdd(pc.stats.values[AE_COUNTER_VISIBLE], 1u);
+        atomicAdd(pc.stats.values[AE_COUNTER_TRIANGLES], c.index_count / 3u);
+    }
+}

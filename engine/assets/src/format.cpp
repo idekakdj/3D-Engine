@@ -62,19 +62,40 @@ u32 texture_format_bytes_per_pixel(TextureFormat format) noexcept {
     case TextureFormat::RGBA8_SRGB: return 4;
     case TextureFormat::RGBA16F: return 8;
     case TextureFormat::RGBA32F: return 16;
+    case TextureFormat::BC7_SRGB:
+    case TextureFormat::BC7_UNORM:
+    case TextureFormat::BC5_UNORM: return 0; // block-compressed: see texture_format_block_bytes()
     }
     return 0;
 }
 
-u64 texture_byte_size(const TextureData& t) noexcept {
-    const u64 bpp = texture_format_bytes_per_pixel(t.format);
-    u64       total = 0;
-    for (u32 m = 0; m < t.mip_levels && m < 32; ++m) {
-        const u64 w = std::max<u64>(1, static_cast<u64>(t.width) >> m);
-        const u64 h = std::max<u64>(1, static_cast<u64>(t.height) >> m);
-        total += w * h * t.array_layers * bpp;
+bool is_block_compressed(TextureFormat format) noexcept {
+    return format == TextureFormat::BC7_SRGB || format == TextureFormat::BC7_UNORM ||
+           format == TextureFormat::BC5_UNORM;
+}
+
+u32 texture_format_block_bytes(TextureFormat format) noexcept {
+    return is_block_compressed(format) ? 16u : 0u;
+}
+
+u64 texture_layer_byte_size(TextureFormat format, u32 width, u32 height, u32 mip) noexcept {
+    if (mip >= 32) return 0;
+    const u64 w = std::max<u64>(1, static_cast<u64>(width) >> mip);
+    const u64 h = std::max<u64>(1, static_cast<u64>(height) >> mip);
+    if (is_block_compressed(format)) return ((w + 3) / 4) * ((h + 3) / 4) * texture_format_block_bytes(format);
+    return w * h * texture_format_bytes_per_pixel(format);
+}
+
+u64 texture_mip_offset(const TextureData& t, u32 mip) noexcept {
+    u64 offset = 0;
+    for (u32 m = 0; m < mip && m < 32; ++m) {
+        offset += texture_layer_byte_size(t.format, t.width, t.height, m) * t.array_layers;
     }
-    return total;
+    return offset;
+}
+
+u64 texture_byte_size(const TextureData& t) noexcept {
+    return texture_mip_offset(t, t.mip_levels);
 }
 
 namespace {
@@ -105,7 +126,7 @@ Result<void> validate(const MeshData& m) {
 }
 
 Result<void> validate(const TextureData& t) {
-    if (static_cast<u8>(t.format) > static_cast<u8>(TextureFormat::RGBA32F))
+    if (static_cast<u8>(t.format) > static_cast<u8>(TextureFormat::BC5_UNORM))
         return invalid("unknown texture format");
     if (t.width == 0 || t.height == 0 || t.width > (1u << 18) || t.height > (1u << 18))
         return invalid(std::format("bad texture size {}x{}", t.width, t.height));

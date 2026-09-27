@@ -4,11 +4,18 @@
 // source hash, importer version} and persists it as `<cooked_root>/asset_db.json`
 // (sorted, diff-friendly JSON). It owns the import -> cook step:
 //
-//   import_source(file)   hash source (+ recorded dependencies + import settings); if the
-//                         hash and kImporterVersion match the record and every cooked file
-//                         exists -> UpToDate; otherwise import, write one .aeasset per
+//   import_source(file)   fast path: if kImporterVersion, the import-settings fingerprint and
+//                         the size + mtime of the source and every recorded dependency match
+//                         the record and every cooked file exists -> UpToDate WITHOUT hashing.
+//                         Otherwise hash source (+ dependencies + settings): an equal hash is
+//                         still UpToDate (stamps are refreshed; the hash is authoritative
+//                         whenever stamps differ); else import, write one .aeasset per
 //                         sub-asset under <cooked_root>/<source_path>/<key>.aeasset, and
 //                         replace the source's records (stale sub-assets are removed).
+//                         A (re)imported source's ImportResult::referenced_sources (shared
+//                         standalone images) are imported too.
+//                         Trade-off: an edit that keeps both size and mtime is not detected
+//                         (use force / --force); every other change is.
 //   scan()                import every supported source under content_root (in parallel
 //                         through aether::JobSystem when requested) and prune records of
 //                         deleted sources.
@@ -58,6 +65,7 @@ struct SourceRecord {
     u64                 source_hash = 0;
     u32                 importer_version = 0;
     FileStamp           stamp;               // of the source file at import time
+    u64                 settings_fingerprint = 0; // ImportSettings::fingerprint() at import time
     std::vector<String> dependencies;        // content-relative (or absolute) paths
     std::vector<FileStamp> dependency_stamps; // parallel to `dependencies`
     AssetId             primary;
@@ -72,6 +80,7 @@ struct ImportOutcome {
     u32                 assets_written = 0;
     Error               error;    // meaningful when status == Failed
     std::vector<String> warnings; // importer warnings (Imported only)
+    bool                hashed = false; // the incremental check had to hash (stamps differed)
 };
 
 struct ScanOptions {
@@ -87,6 +96,7 @@ struct ScanReport {
     u32 failed = 0;
     u32 removed = 0;        // pruned sources
     u32 assets_written = 0;
+    u32 hashed = 0;         // sources whose up-to-date check needed a content hash
     std::vector<ImportOutcome> outcomes; // one per source found, sorted by source path
 };
 
@@ -156,6 +166,9 @@ public:
                                                   const std::vector<String>& dependencies) const;
 
 private:
+    ImportOutcome import_source_impl(const std::filesystem::path& source, bool force, ImportResult* out_result,
+                                     bool import_references);
+
     struct Impl;
     std::unique_ptr<Impl> impl_;
 };

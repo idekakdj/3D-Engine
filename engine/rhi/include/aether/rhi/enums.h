@@ -14,6 +14,7 @@ enum class Format : u16 {
     R32Uint, RG32Uint, RGBA32Uint,
     D32F, D24UnormS8, D32FS8,
     BC1Srgb, BC3Srgb, BC5Unorm, BC7Srgb, // block-compressed
+    BC7Unorm,                            // ADR-0009 (additive): linear BC7 (metallic-roughness, AO)
 };
 
 enum class TextureType : u8 { Tex1D, Tex2D, Tex3D, Cube, Tex2DArray, CubeArray };

@@ -109,6 +109,10 @@ layout(buffer_reference, scalar, buffer_reference_align = 16) readonly buffer Jo
 layout(buffer_reference, scalar, buffer_reference_align = 16) readonly buffer LineBuffer { GpuLineVertex items[]; };
 layout(buffer_reference, scalar, buffer_reference_align = 8) readonly buffer SkinBuffer { GpuSkinVertex items[]; };
 
+// align 16: the pointer itself is loaded from FrameData, and glslang derives that load's
+// Aligned operand from the pointee's buffer_reference_align (must be >= 8 for a 64-bit pointer).
+layout(buffer_reference, scalar, buffer_reference_align = 16) readonly buffer UserIdBuffer { uint items[]; };
+
 layout(buffer_reference, scalar, buffer_reference_align = 4) buffer ClusterGrid { uint counts[]; };
 layout(buffer_reference, scalar, buffer_reference_align = 4) buffer ClusterIndices { uint indices[]; };
 
@@ -163,6 +167,7 @@ layout(buffer_reference, scalar, buffer_reference_align = 16) readonly buffer Fr
     float shadow_fade_start;
     float shadow_normal_bias;
     float cascade_blend;
+    UserIdBuffer user_ids; // RenderMeshInstance::user_id, written on pick frames only
 };
 
 vec3 ae_safe_normalize(vec3 v) { return v * inversesqrt(max(dot(v, v), 1e-12)); }

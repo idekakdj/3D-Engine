@@ -161,6 +161,7 @@ struct GpuFrame {
     f32  shadow_fade_start = 0.0f;           // 996
     f32  shadow_normal_bias = 0.0f;          // 1000 in shadow texels
     f32  cascade_blend = 0.1f;               // 1004 fraction of a cascade used to blend
+    u64  user_ids = 0;                       // 1008 UserIdBuffer: RenderMeshInstance::user_id (pick frames)
 };
 static_assert(offsetof(GpuFrame, view) == 48);
 static_assert(offsetof(GpuFrame, cascade_view_proj) == 560);
@@ -172,7 +173,83 @@ static_assert(offsetof(GpuFrame, irradiance_map) == 928);
 static_assert(offsetof(GpuFrame, skybox_map) == 944);
 static_assert(offsetof(GpuFrame, cluster_x) == 960);
 static_assert(offsetof(GpuFrame, shadow_distance) == 992);
-static_assert(sizeof(GpuFrame) == 1008);
+static_assert(offsetof(GpuFrame, user_ids) == 1008);
+static_assert(sizeof(GpuFrame) == 1016);
+
+// ---------------------------------------------------------------------------
+// GPU-driven culling + picking (ADR-0009). GLSL side: shaders/renderer/cull_data.glsl.
+// ---------------------------------------------------------------------------
+// Opaque/masked candidates are grouped into batches by pipeline permutation and vertex
+// arena (materials are bindless, so they never split a batch):
+//   batch = skinned * 8 + masked * 4 + double_sided * 2 + skin_arena
+inline constexpr u32 kMaxDrawBatches = 16;
+inline constexpr u32 kCullGroupSize = 64;
+inline constexpr u32 kHiZGroupSize = 8;
+
+// GpuCullInstance::flags
+inline constexpr u32 kCullFlagNeverCull = 1u << 0;
+
+// Counter buffer (u32 words): per-batch draw counts of both phases, then the statistics
+// and the pick result, which are copied to the CPU readback ring as one block.
+inline constexpr u32 kCounterPhase1 = 0;                      // [0, 16)
+inline constexpr u32 kCounterPhase2 = kMaxDrawBatches;        // [16, 32)
+inline constexpr u32 kCounterStats = 2 * kMaxDrawBatches;     // 32: first word copied back
+inline constexpr u32 kCounterFrustumCulled = kCounterStats + 0;
+inline constexpr u32 kCounterOcclusionCulled = kCounterStats + 1;
+inline constexpr u32 kCounterVisible = kCounterStats + 2;
+inline constexpr u32 kCounterTriangles = kCounterStats + 3;
+inline constexpr u32 kCounterPick = kCounterStats + 4;
+inline constexpr u32 kReadbackWords = 8;                      // words copied per frame slot
+inline constexpr u32 kCounterWords = kCounterStats + kReadbackWords;
+
+// Cull phases (CullPush::phase).
+inline constexpr u32 kCullPhaseFrustum = 0; // single pass: frustum only
+inline constexpr u32 kCullPhase1 = 1;       // frustum + visible last frame
+inline constexpr u32 kCullPhase2 = 2;       // frustum + Hi-Z occlusion; not drawn in phase 1
+
+[[nodiscard]] constexpr u32 draw_batch_index(bool skinned, bool masked, bool double_sided,
+                                             bool skin_arena) noexcept {
+    return (skinned ? 8u : 0u) | (masked ? 4u : 0u) | (double_sided ? 2u : 0u) | (skin_arena ? 1u : 0u);
+}
+
+struct GpuCullInstance {
+    Vec3 aabb_min{ 0.0f };   // 0  world space
+    u32  instance = 0;       // 12 index into the frame instance buffer (= firstInstance)
+    Vec3 aabb_max{ 0.0f };   // 16
+    u32  batch = 0;          // 28 draw_batch_index()
+    u32  first_index = 0;    // 32
+    u32  index_count = 0;    // 36
+    i32  vertex_offset = 0;  // 40
+    u32  flags = 0;          // 44 kCullFlag*
+};
+static_assert(sizeof(GpuCullInstance) == 48);
+static_assert(offsetof(GpuCullInstance, batch) == 28);
+
+// VkDrawIndexedIndirectCommand.
+struct GpuDrawCommand {
+    u32 index_count = 0;
+    u32 instance_count = 0;
+    u32 first_index = 0;
+    i32 vertex_offset = 0;
+    u32 first_instance = 0;
+};
+static_assert(sizeof(GpuDrawCommand) == 20);
+
+struct GpuCullView {
+    Vec4  planes[6]{};                    // 0   main-view frustum (CPU-extracted, same as CPU culling)
+    Mat4  view_proj{ 1.0f };              // 96  jittered: matches the depth buffer the Hi-Z is built from
+    Vec2  viewport{ 1.0f };               // 160 depth-buffer extent in pixels
+    UVec2 hzb_size{ 1 };                  // 168 Hi-Z mip-0 extent (power of two per axis)
+    u32   hzb_mips = 0;                   // 176
+    u32   hzb_tex = kGpuInvalidIndex;     // 180 sampler2D (R32F, point clamp), texelFetch per mip
+    u32   plane_count = 6;                // 184 0 disables frustum culling
+    u32   pad0 = 0;                       // 188
+    u32   batch_offset[kMaxDrawBatches]{}; // 192 first command of each batch in a phase's array
+};
+static_assert(offsetof(GpuCullView, view_proj) == 96);
+static_assert(offsetof(GpuCullView, hzb_size) == 168);
+static_assert(offsetof(GpuCullView, batch_offset) == 192);
+static_assert(sizeof(GpuCullView) == 256);
 
 // ---------------------------------------------------------------------------
 // Push-constant blocks (<= 128 bytes; the universal layout exposes them to all stages).
@@ -187,6 +264,37 @@ struct MeshPush {             // prepass, shadows, forward, overdraw
     u32 pad = 0;
 };
 static_assert(sizeof(MeshPush) == 40);
+
+struct CullPush {
+    u64 candidates = 0;       // 0  CullInstanceBuffer
+    u64 view = 0;             // 8  CullViewBuffer
+    u64 draws = 0;            // 16 this phase's GpuDrawCommand array
+    u64 counts = 0;           // 24 this phase's per-batch draw counts
+    u64 stats = 0;            // 32 counter buffer base (kCounter* words)
+    u64 visibility = 0;       // 40 per-instance visibility of the previous frame (occlusion)
+    u32 count = 0;            // 48 candidates
+    u32 phase = 0;            // 52 kCullPhase*
+    u32 pad[2]{};
+};
+static_assert(sizeof(CullPush) == 64);
+
+struct HiZPush {
+    u32   src = 0;            // 0  level 0: depth (sampled); else previous mip (r32f storage)
+    u32   dst = 0;            // 4  r32f storage view of the mip being written
+    UVec2 src_size{ 1 };      // 8
+    UVec2 dst_size{ 1 };      // 16
+    u32   from_depth = 0;     // 24
+    u32   pad = 0;
+};
+static_assert(sizeof(HiZPush) == 32);
+
+struct PickPush {
+    u64   counters = 0;       // 0  counter buffer (writes kCounterPick)
+    u32   id_img = 0;         // 8  r32ui storage view of the id buffer
+    u32   pad = 0;
+    UVec2 pixel{ 0 };         // 16 internal-resolution pixel
+};
+static_assert(sizeof(PickPush) == 24);
 
 struct LightCullPush {
     u64 frame = 0;

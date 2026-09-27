@@ -42,12 +42,23 @@ void generate_flat_normals(std::vector<Vertex>&     vertices,
                            std::vector<u32>&        indices,
                            std::vector<SkinVertex>* skin = nullptr);
 
-// Per-vertex tangents by per-triangle UV-gradient accumulation (Lengyel), then
-// Gram-Schmidt orthogonalisation against the vertex normal; w = handedness (see file
-// comment). Triangles with degenerate UVs contribute nothing; vertices left without a
-// usable tangent receive an arbitrary unit tangent perpendicular to the normal (w = +1).
-// Requires normals to be present. TODO(assets): switch to MikkTSpace for bit-exact
-// agreement with DCC-baked normal maps.
+// MikkTSpace tangents (github.com/mmikk/MikkTSpace - the Blender / Substance / xNormal / glTF
+// sample-model standard, so DCC-baked normal maps match the tangent frame they were baked in),
+// evaluated with the conventions above (UVs are fed as (u, 1 - v), exactly like Blender's glTF
+// exporter). Where the corners sharing a vertex get different tangents (mirrored-UV seams,
+// hard tangent splits) the vertex is SPLIT so every corner keeps MikkTSpace's exact result:
+// vertices are appended, `indices` are rewritten and `skin` (if non-null and the same size
+// as `vertices`) is expanded alongside. Triangles with out-of-range indices are ignored;
+// vertices without a usable tangent receive an arbitrary unit tangent perpendicular to the
+// normal (w = +1). Tangents are unit length and orthogonal to the (normalised) vertex normal.
+// Requires normals. Returns the number of vertices added.
+u32 generate_tangents_mikktspace(std::vector<Vertex>&     vertices,
+                                 std::vector<u32>&        indices,
+                                 std::vector<SkinVertex>* skin = nullptr);
+
+// MikkTSpace without re-indexing (fixed vertex count, e.g. procedural meshes): a vertex whose
+// corners disagree gets the normalised average tangent of its majority handedness; identical
+// to generate_tangents_mikktspace() for meshes without such seams. Requires normals.
 void generate_tangents(Span<Vertex> vertices, Span<const u32> indices);
 
 // Renormalises weights to sum to 1 (joints with zero weight keep their index). A vertex

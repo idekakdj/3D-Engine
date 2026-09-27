@@ -29,6 +29,8 @@ void imgui_render(CommandList& cmd);
 // Register a TextureHandle for display inside ImGui (returns an ImTextureID as u64).
 // Used by the editor viewport to show the rendered scene as an image.
 // The texture must be in ResourceState::ShaderRead when ImGui samples it.
+// `sampler` is currently IGNORED: the ImGui Vulkan backend (1.92) binds its own linear-clamp
+// sampler for every user texture. It is kept for API stability / other backends.
 u64  imgui_add_texture(Device& device, TextureHandle texture, SamplerHandle sampler);
 void imgui_remove_texture(Device& device, u64 imgui_texture_id);
 

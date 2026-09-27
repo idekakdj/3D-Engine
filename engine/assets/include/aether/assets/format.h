@@ -115,8 +115,20 @@ template <CookableAsset T>
 // every CookableAsset type (MeshData, TextureData, MaterialData, SkeletonData,
 // AnimationClipData, SceneData).
 
+// Texture layout (asset_types.h): mips 0..n-1, each mip holds every layer (layer-major), tightly
+// packed; block-compressed formats store ceil(w/4) x ceil(h/4) blocks per layer and mip.
+
 // Expected byte size of TextureData::pixels for its dimensions/format/mips/layers.
 [[nodiscard]] u64 texture_byte_size(const TextureData& texture) noexcept;
+// Bytes per pixel of an uncompressed format; 0 for block-compressed formats.
 [[nodiscard]] u32 texture_format_bytes_per_pixel(TextureFormat format) noexcept;
+// BC5 / BC7: true (16-byte 4x4 blocks).
+[[nodiscard]] bool is_block_compressed(TextureFormat format) noexcept;
+// Bytes per 4x4 block (16 for BC5/BC7); 0 for uncompressed formats.
+[[nodiscard]] u32 texture_format_block_bytes(TextureFormat format) noexcept;
+// Bytes of ONE layer of mip `mip` for a texture whose mip 0 is width x height.
+[[nodiscard]] u64 texture_layer_byte_size(TextureFormat format, u32 width, u32 height, u32 mip) noexcept;
+// Byte offset of mip `mip` (layer 0) inside TextureData::pixels.
+[[nodiscard]] u64 texture_mip_offset(const TextureData& texture, u32 mip) noexcept;
 
 } // namespace aether::assets

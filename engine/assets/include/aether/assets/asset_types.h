@@ -49,6 +49,11 @@ enum class TextureFormat : u8 {
     RGBA8_SRGB,      // color data (base color, emissive)
     RGBA16F,
     RGBA32F,         // HDR environment maps (equirect)
+    // ADR-0009 (additive): block-compressed, produced by the cooker. `pixels` holds 4x4 blocks
+    // for every mip (mip_levels >= 1), layer-major within each mip.
+    BC7_SRGB,        // color (base color, emissive)
+    BC7_UNORM,       // linear RGBA data (metallic-roughness, occlusion)
+    BC5_UNORM,       // two-channel normal maps (reconstruct Z)
 };
 
 struct TextureData {

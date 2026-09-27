@@ -167,6 +167,7 @@ Result<void> AssetDatabase::Impl::load_json(const fs::path& file) {
         sr.source_hash = *hash;
         sr.importer_version = get_number<u32>(s, "importer_version").value_or(0);
         sr.stamp = { get_number<i64>(s, "mtime").value_or(0), get_number<u64>(s, "size").value_or(0) };
+        sr.settings_fingerprint = u64_from_hex(get_string(s, "settings").value_or("")).value_or(0);
         sr.primary = asset_id_from_hex(get_string(s, "primary").value_or("")).value_or(AssetId{});
         if (const json* deps = member(s, "dependencies"); deps && deps->is_array()) {
             for (const json& d : *deps) {
@@ -217,6 +218,7 @@ json AssetDatabase::Impl::to_json() const {
         s["importer_version"] = sr.importer_version;
         s["mtime"] = sr.stamp.mtime;
         s["size"] = sr.stamp.size;
+        s["settings"] = u64_to_hex(sr.settings_fingerprint);
         s["primary"] = asset_id_to_hex(sr.primary);
         json deps = json::array();
         for (usize i = 0; i < sr.dependencies.size(); ++i) {
@@ -333,6 +335,11 @@ Result<u64> AssetDatabase::compute_source_hash(StringView source_path, const std
 }
 
 ImportOutcome AssetDatabase::import_source(const fs::path& source, bool force, ImportResult* out_result) {
+    return import_source_impl(source, force, out_result, true);
+}
+
+ImportOutcome AssetDatabase::import_source_impl(const fs::path& source, bool force, ImportResult* out_result,
+                                                bool import_references) {
     Impl&          d = *impl_;
     const fs::path abs = source.is_absolute() ? source : d.content_root / source;
     ImportOutcome  oc;
@@ -354,26 +361,37 @@ ImportOutcome AssetDatabase::import_source(const fs::path& source, bool force, I
     };
 
     // ---- incremental check ----
+    const u64 fingerprint = d.settings.fingerprint();
     if (!force) {
         if (auto prev = find_source(rel); prev && prev->importer_version == kImporterVersion) {
-            auto hash = compute_source_hash(rel, prev->dependencies);
-            bool fresh = hash && *hash == prev->source_hash;
+            bool cooked_present = true;
             for (const AssetRecord& rec : assets_of_source(rel)) {
                 std::error_code ec;
-                if (!fresh) break;
-                fresh = fs::exists(cooked_file(rec), ec);
-            }
-            if (fresh) {
-                const std::vector<FileStamp> dep_stamps = dep_stamps_of(prev->dependencies);
-                std::lock_guard              lock(d.mutex);
-                if (auto it = d.sources.find(rel); it != d.sources.end() &&
-                                                   (it->second.stamp != *stamp || it->second.dependency_stamps != dep_stamps)) {
-                    it->second.stamp = *stamp; // touched but unchanged: refresh stamps only
-                    it->second.dependency_stamps = dep_stamps;
-                    d.dirty = true;
+                if (!fs::exists(cooked_file(rec), ec)) {
+                    cooked_present = false;
+                    break;
                 }
-                oc.status = ImportStatus::UpToDate;
+            }
+            const std::vector<FileStamp> dep_stamps = dep_stamps_of(prev->dependencies);
+            if (cooked_present && prev->settings_fingerprint == fingerprint && prev->stamp == *stamp &&
+                prev->dependency_stamps == dep_stamps) {
+                oc.status = ImportStatus::UpToDate; // size + mtime fast path: no hashing
                 return oc;
+            }
+            if (cooked_present) {
+                oc.hashed = true;
+                auto hash = compute_source_hash(rel, prev->dependencies);
+                if (hash && *hash == prev->source_hash) {
+                    std::lock_guard lock(d.mutex);
+                    if (auto it = d.sources.find(rel); it != d.sources.end()) {
+                        it->second.stamp = *stamp; // touched but unchanged: refresh stamps only
+                        it->second.dependency_stamps = dep_stamps;
+                        it->second.settings_fingerprint = fingerprint;
+                        d.dirty = true;
+                    }
+                    oc.status = ImportStatus::UpToDate;
+                    return oc;
+                }
             }
         }
     }
@@ -442,6 +460,7 @@ ImportOutcome AssetDatabase::import_source(const fs::path& source, bool force, I
         sr.source_hash = *hash;
         sr.importer_version = kImporterVersion;
         sr.stamp = *stamp;
+        sr.settings_fingerprint = fingerprint;
         sr.dependency_stamps = dep_stamps_of(deps);
         sr.dependencies = std::move(deps);
         sr.primary = res.primary;
@@ -469,6 +488,17 @@ ImportOutcome AssetDatabase::import_source(const fs::path& source, bool force, I
     oc.status = ImportStatus::Imported;
     oc.assets_written = static_cast<u32>(records.size());
     oc.warnings = res.warnings;
+
+    // Shared standalone images this source references (texture de-duplication). A scan
+    // imports every source itself, so it skips this.
+    if (import_references) {
+        for (const fs::path& ref : res.referenced_sources) {
+            const ImportOutcome ref_oc = import_source_impl(ref, false, nullptr, false);
+            if (ref_oc.status == ImportStatus::Failed) {
+                oc.warnings.push_back(std::format("referenced image {}: {}", ref_oc.source_path, ref_oc.error.message));
+            }
+        }
+    }
     if (out_result) *out_result = std::move(res);
     return oc;
 }
@@ -500,7 +530,9 @@ ScanReport AssetDatabase::scan(const ScanOptions& options) {
 
     report.sources_found = static_cast<u32>(sorted.size());
     report.outcomes.resize(sorted.size());
-    auto work = [&](u32 i) { report.outcomes[i] = import_source(sorted[i].second, options.force); };
+    auto work = [&](u32 i) {
+        report.outcomes[i] = import_source_impl(sorted[i].second, options.force, nullptr, false);
+    };
     if (options.parallel && sorted.size() > 1) {
         JobCounter counter;
         JobSystem::parallel_for(static_cast<u32>(sorted.size()), 1, work, &counter);
@@ -528,6 +560,7 @@ ScanReport AssetDatabase::scan(const ScanOptions& options) {
         case ImportStatus::UpToDate: ++report.up_to_date; break;
         case ImportStatus::Failed: ++report.failed; break;
         }
+        if (oc.hashed) ++report.hashed;
     }
     return report;
 }

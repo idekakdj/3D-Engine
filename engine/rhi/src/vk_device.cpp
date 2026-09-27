@@ -549,20 +549,23 @@ Result<void> VulkanDevice::create_logical_device() {
     features_.descriptor_indexing     = true;
     features_.buffer_device_address   = true;
     features_.draw_indirect_count     = e12.drawIndirectCount == VK_TRUE;
+    features_.draw_indirect_first_instance = e.drawIndirectFirstInstance == VK_TRUE;
     features_.mesh_shaders            = enable.has_mesh;
     features_.ray_tracing             = enable.has_rt;
     features_.wide_lines              = e.wideLines == VK_TRUE;
     features_.fill_mode_non_solid     = e.fillModeNonSolid == VK_TRUE;
     features_.depth_clamp             = e.depthClamp == VK_TRUE;
     features_.sampler_anisotropy      = e.samplerAnisotropy == VK_TRUE;
+    features_.texture_compression_bc  = e.textureCompressionBC == VK_TRUE;
     features_.max_push_constant_bytes = 128;
     features_.adapter_name            = props_.deviceName;
     features_.driver_version          = driver_info_;
 
     AE_LOG_INFO("RHI",
-                "features: drawIndirectCount={} mesh={} rt={} wideLines={} fillModeNonSolid={} depthClamp={} "
+                "features: drawIndirectCount={} drawIndirectFirstInstance={} bc={} mesh={} rt={} wideLines={} fillModeNonSolid={} depthClamp={} "
                 "anisotropy={} storageWriteWithoutFormat={} memoryBudget={}",
-                features_.draw_indirect_count, features_.mesh_shaders, features_.ray_tracing, features_.wide_lines,
+                features_.draw_indirect_count, features_.draw_indirect_first_instance,
+                features_.texture_compression_bc, features_.mesh_shaders, features_.ray_tracing, features_.wide_lines,
                 features_.fill_mode_non_solid, features_.depth_clamp, features_.sampler_anisotropy,
                 e.shaderStorageImageWriteWithoutFormat == VK_TRUE, memory_budget_);
     return {};

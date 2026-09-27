@@ -135,12 +135,13 @@ void RendererImpl::setup_lights(const RenderScene& scene) {
 // ===========================================================================
 // Instance resolve + main-view culling (parallel)
 // ===========================================================================
-void RendererImpl::resolve_instances(const RenderScene& scene, GpuInstance* gpu) {
+void RendererImpl::resolve_instances(const RenderScene& scene, GpuInstance* gpu, u32* user_ids) {
     const u32 n = static_cast<u32>(scene.instances.size());
     resolved_.assign(n, ResolvedInstance{});
     const u32 chunks = (n + kCullChunk - 1) / kCullChunk;
     chunk_caster_bounds_.assign(chunks, empty_aabb());
     const bool cull = settings_.frustum_culling;
+    const bool gpu_cull = gpu_.active; // opaque/masked: frustum (and occlusion) tested on the GPU
     const u32  joint_total = static_cast<u32>(scene.joint_matrices.size());
 
     for_each_chunk(chunks, [&](u32 c) {
@@ -184,13 +185,19 @@ void RendererImpl::resolve_instances(const RenderScene& scene, GpuInstance* gpu)
             gi.joint_offset = r.skinned ? in.first_joint : 0u;
             gi.joint_count = r.skinned ? in.joint_count : 0u;
             std::memcpy(&gpu[i], &gi, sizeof(GpuInstance)); // write-combined: one sequential write
+            if (user_ids) {
+                user_ids[i] = in.user_id;
+            }
 
             if (!r.valid) {
                 continue;
             }
             const bool never_cull = instance_flags::has(in.flags, instance_flags::kNeverCull);
             const bool hidden = instance_flags::has(in.flags, instance_flags::kHiddenInMainView);
-            r.visible = !hidden && (never_cull || !cull || frustum_intersects_aabb(view_.frustum, r.bounds));
+            // GPU path: `visible` means "GPU culling candidate" for opaque/masked instances.
+            const bool gpu_candidate = gpu_cull && r.blend != static_cast<u8>(BlendMode::Translucent);
+            r.visible = !hidden && (never_cull || !cull || gpu_candidate ||
+                                    frustum_intersects_aabb(view_.frustum, r.bounds));
             r.view_depth = glm::dot(r.bounds.center() - view_.camera_pos, view_.forward);
             r.caster = instance_flags::has(in.flags, instance_flags::kCastShadow) &&
                        r.blend != static_cast<u8>(BlendMode::Translucent);
@@ -275,10 +282,11 @@ void RendererImpl::cull_cascades(const RenderScene& scene) {
 // Draw lists
 // ===========================================================================
 void RendererImpl::build_draw_lists(const RenderScene& scene) {
-    (void)scene;
     prepass_draws_.clear();
     opaque_draws_.clear();
     translucent_draws_.clear();
+    cull_candidates_.clear();
+    gpu_.batch_count.fill(0);
     for (auto& l : cascade_draws_) {
         l.clear();
     }
@@ -295,9 +303,24 @@ void RendererImpl::build_draw_lists(const RenderScene& scene) {
         d.vertex_offset = r.vertex_offset;
         d.skin_arena = r.skin_arena;
         d.skinned = r.skinned;
+        d.double_sided = r.double_sided;
         const bool masked = r.blend == static_cast<u8>(BlendMode::Masked);
         const bool translucent = r.blend == static_cast<u8>(BlendMode::Translucent);
-        if (r.visible) {
+        if (r.visible && gpu_.active && !translucent) {
+            // GPU-driven: frustum/occlusion culled and drawn indirectly (ADR-0009).
+            GpuCullInstance c;
+            c.aabb_min = r.bounds.min;
+            c.aabb_max = r.bounds.max;
+            c.instance = i;
+            c.batch = draw_batch_index(r.skinned, masked, r.double_sided, r.skin_arena);
+            c.first_index = r.first_index;
+            c.index_count = r.index_count;
+            c.vertex_offset = r.vertex_offset;
+            c.flags = instance_flags::has(scene.instances[i].flags, instance_flags::kNeverCull) ? kCullFlagNeverCull
+                                                                                                : 0u;
+            ++gpu_.batch_count[c.batch];
+            cull_candidates_.push_back(c);
+        } else if (r.visible) {
             ++visible;
             if (translucent) {
                 d.pipeline = mesh_pipeline_index(MeshPass::Translucent, r.skinned, false, r.double_sided);
@@ -330,7 +353,158 @@ void RendererImpl::build_draw_lists(const RenderScene& scene) {
     for (u32 c = 0; c < cascades_.count; ++c) {
         std::sort(cascade_draws_[c].begin(), cascade_draws_[c].end(), by_key);
     }
+    cpu_visible_ = visible;
     stats_.instances_visible = visible;
+}
+
+// ===========================================================================
+// GPU-driven culling (ADR-0009)
+// ===========================================================================
+bool RendererImpl::gpu_culling_supported() const {
+    const rhi::DeviceFeatures& f = device_.features();
+    // Overdraw visualises the CPU draw lists (it re-pipelines every opaque item).
+    return settings_.gpu_culling && f.draw_indirect_count && f.draw_indirect_first_instance &&
+           pipelines_->valid(PipelineId::GpuCull) && settings_.debug_view != DebugView::Overdraw;
+}
+
+void RendererImpl::write_cull_data(GpuCullInstance* candidates, GpuCullView* view) {
+    const u32 n = static_cast<u32>(cull_candidates_.size());
+    gpu_.candidates = n;
+    gpu_.cmd_capacity = std::max(64u, std::bit_ceil(std::max(n, 1u)));
+    u32 offset = 0;
+    std::array<u32, kMaxDrawBatches> cursor{};
+    for (u32 b = 0; b < kMaxDrawBatches; ++b) {
+        gpu_.batch_offset[b] = offset;
+        cursor[b] = offset;
+        offset += gpu_.batch_count[b];
+    }
+    // Candidates grouped by batch (neighbouring threads mostly hit the same counter).
+    for (const GpuCullInstance& c : cull_candidates_) {
+        std::memcpy(&candidates[cursor[c.batch]++], &c, sizeof(GpuCullInstance));
+    }
+    GpuCullView v;
+    for (u32 i = 0; i < 6; ++i) {
+        v.planes[i] = view_.frustum.planes[i];
+    }
+    v.plane_count = settings_.frustum_culling ? view_.frustum.plane_count : 0u;
+    v.view_proj = view_.view_proj; // jittered, like the depth buffer
+    v.viewport = Vec2(output_size_);
+    for (u32 b = 0; b < kMaxDrawBatches; ++b) {
+        v.batch_offset[b] = gpu_.batch_offset[b];
+    }
+    std::memcpy(view, &v, sizeof(GpuCullView)); // Hi-Z fields are patched by the Hi-Z pass
+    gpu_.view_cpu = view;
+}
+
+void RendererImpl::ensure_visibility_buffer(u32 instances) {
+    const u32 want = std::max(256u, std::bit_ceil(std::max(instances, 1u)));
+    if (visibility_buffer_.is_valid() && visibility_capacity_ >= want) {
+        return;
+    }
+    if (visibility_buffer_.is_valid()) {
+        device_.destroy(visibility_buffer_); // deferred past in-flight frames by the device
+    }
+    rhi::BufferDesc d;
+    d.size = static_cast<u64>(want) * sizeof(u32);
+    d.usage = rhi::BufferUsage::Storage | rhi::BufferUsage::TransferDst;
+    d.debug_name = "GpuCull.Visibility";
+    visibility_buffer_ = device_.create_buffer(d);
+    visibility_capacity_ = visibility_buffer_.is_valid() ? want : 0u;
+    visibility_state_ = rhi::ResourceState::Undefined;
+    visibility_clear_ = true;
+}
+
+void RendererImpl::ensure_readback_buffer() {
+    if (readback_buffer_.is_valid()) {
+        return;
+    }
+    rhi::BufferDesc d;
+    d.size = static_cast<u64>(frames_in_flight_) * kReadbackWords * sizeof(u32);
+    d.usage = rhi::BufferUsage::TransferDst;
+    d.memory = rhi::MemoryUsage::GpuToCpu;
+    d.debug_name = "Renderer.Readback";
+    readback_buffer_ = device_.create_buffer(d);
+    readback_state_ = rhi::ResourceState::Undefined;
+    readback_slots_.assign(frames_in_flight_, ReadbackSlot{});
+}
+
+void RendererImpl::collect_readbacks(u32 slot) {
+    if (!readback_buffer_.is_valid() || slot >= readback_slots_.size() || !readback_slots_[slot].pending) {
+        return;
+    }
+    // The frame that last used this slot has completed: Device::begin_frame() waited for it
+    // (frame-slot contract, renderer_impl.h) and end_frame made its writes host-available.
+    ReadbackSlot& rs = readback_slots_[slot];
+    device_.invalidate_mapped(readback_buffer_);
+    const auto* base = static_cast<const u32*>(device_.map(readback_buffer_));
+    if (base != nullptr) {
+        const u32* w = base + static_cast<usize>(slot) * kReadbackWords;
+        if (rs.gpu_stats) {
+            for (u32 k = 0; k < 4; ++k) {
+                gpu_stats_latched_[k] = w[k];
+            }
+        }
+        if (rs.pick) {
+            pick_result_ = w[kCounterPick - kCounterStats];
+        }
+    }
+    rs = ReadbackSlot{};
+}
+
+void RendererImpl::draw_gpu_batches(rhi::CommandList& cmd, MeshPass pass, rhi::BufferHandle draws,
+                                    rhi::BufferHandle counters, MeshPush push, bool phase1, bool phase2) {
+    if (gpu_.candidates == 0) {
+        return;
+    }
+    cmd.bind_index_buffer(geometry_.index_buffer(), 0, false);
+    const bool depth_like = pass == MeshPass::Depth || pass == MeshPass::Shadow;
+    u32        bound_pipeline = kInvalidU32;
+    int        bound_arena = -1;
+    for (u32 b = 0; b < kMaxDrawBatches; ++b) {
+        if (gpu_.batch_count[b] == 0) {
+            continue;
+        }
+        const bool skinned = (b & 8u) != 0;
+        const bool masked = (b & 4u) != 0;
+        const bool double_sided = (b & 2u) != 0;
+        const bool skin_arena = (b & 1u) != 0;
+        const u32  pipeline = mesh_pipeline_index(pass, skinned, depth_like && masked, double_sided);
+        const rhi::PipelineHandle p = pipelines_->get(pipeline);
+        if (!p.is_valid()) {
+            continue;
+        }
+        if (pipeline != bound_pipeline) {
+            bound_pipeline = pipeline;
+            cmd.bind_pipeline(p);
+            cmd.push_constants(rhi::ShaderStage::AllGraphics, 0, sizeof(push), &push);
+        }
+        const int arena = skin_arena ? 1 : 0;
+        if (arena != bound_arena) {
+            bound_arena = arena;
+            cmd.bind_vertex_buffer(0, skin_arena ? geometry_.skinned_vertex_buffer() : geometry_.static_vertex_buffer(),
+                                   0);
+        }
+        for (u32 phase = 0; phase < 2; ++phase) {
+            if ((phase == 0 && !phase1) || (phase == 1 && !phase2)) {
+                continue;
+            }
+            const u64 cmd_offset =
+                (static_cast<u64>(phase) * gpu_.cmd_capacity + gpu_.batch_offset[b]) * sizeof(GpuDrawCommand);
+            const u64 count_offset =
+                static_cast<u64>((phase == 0 ? kCounterPhase1 : kCounterPhase2) + b) * sizeof(u32);
+            cmd.draw_indexed_indirect_count(draws, cmd_offset, counters, count_offset, gpu_.batch_count[b],
+                                            sizeof(GpuDrawCommand));
+            ++stats_.draw_calls;
+        }
+    }
+}
+
+void RendererImpl::request_pick(UVec2 pixel) { pending_pick_ = pixel; }
+
+std::optional<u32> RendererImpl::poll_pick() {
+    std::optional<u32> r = pick_result_;
+    pick_result_.reset();
+    return r;
 }
 
 void RendererImpl::draw_items(rhi::CommandList& cmd, std::span<const DrawItem> items, MeshPush push,
@@ -503,6 +677,35 @@ void RendererImpl::render(const RenderScene& scene, rhi::CommandList& cmd, const
         AE_LOG_WARN("Renderer", "render(): invalid RenderTarget - frame skipped");
         return;
     }
+    const u32 slot = static_cast<u32>(frame_counter_ % frames_in_flight_);
+    frame_slot_ = slot;
+    collect_readbacks(slot); // results of the frame that used this slot frames_in_flight ago
+
+    // ---- GPU-driven path + picking decisions (ADR-0009) ----
+    gpu_.active = gpu_culling_supported();
+    gpu_.occlusion = gpu_.active && settings_.occlusion_culling && pipelines_->valid(PipelineId::HiZBuild);
+    gpu_.candidates = 0;
+    if (const i32 mode = gpu_.active ? (gpu_.occlusion ? 2 : 1) : 0; mode != logged_cull_mode_) {
+        logged_cull_mode_ = mode;
+        constexpr const char* kModes[] = { "CPU frustum culling", "GPU frustum culling + indirect draws",
+                                           "GPU frustum + two-phase Hi-Z occlusion culling + indirect draws" };
+        AE_LOG_INFO("Renderer", "opaque path: {}", kModes[mode]);
+    }
+    pick_this_frame_ = false;
+    if (pending_pick_) {
+        const UVec2 p = *pending_pick_;
+        pending_pick_.reset();
+        if (p.x >= target.extent.x || p.y >= target.extent.y) {
+            pick_result_ = 0u; // outside the image: nothing pickable there
+        } else if (pipelines_->valid(PipelineId::PickResolve)) {
+            // RenderTarget pixel -> internal-resolution pixel (the tonemap pass scales).
+            const Vec2 uv = (Vec2(p) + 0.5f) / Vec2(target.extent);
+            pick_pixel_ = glm::min(UVec2(uv * Vec2(output_size_)), output_size_ - UVec2(1));
+            pick_this_frame_ = true;
+        } else {
+            AE_LOG_WARN("Renderer", "request_pick: picking shaders unavailable - request dropped");
+        }
+    }
 
     cmd.push_debug_group("Renderer");
     geometry_.record_pending_copies(cmd);
@@ -525,8 +728,10 @@ void RendererImpl::render(const RenderScene& scene, rhi::CommandList& cmd, const
                       FrameArena::padded(std::max<usize>(gpu_lights_.size(), 1) * sizeof(GpuLight)) +
                       FrameArena::padded(std::max<usize>(n_joints, 1) * sizeof(Mat4)) +
                       FrameArena::padded(std::max<u32>(line_vertex_count_, 1) * sizeof(GpuLineVertex)) +
-                      FrameArena::kAlignment * 8;
-    const u32 slot = static_cast<u32>(frame_counter_ % frames_in_flight_);
+                      FrameArena::padded(std::max<usize>(n_inst, 1) * sizeof(GpuCullInstance)) +
+                      FrameArena::padded(sizeof(GpuCullView)) +
+                      FrameArena::padded(std::max<usize>(n_inst, 1) * sizeof(u32)) +
+                      FrameArena::kAlignment * 12;
     if (!frame_arena_.begin_frame(slot, bytes)) {
         cmd.pop_debug_group();
         return;
@@ -537,17 +742,33 @@ void RendererImpl::render(const RenderScene& scene, rhi::CommandList& cmd, const
     const auto a_light = frame_arena_.allocate_array<GpuLight>(std::max<usize>(gpu_lights_.size(), 1));
     const auto a_joint = frame_arena_.allocate_array<Mat4>(std::max<usize>(n_joints, 1));
     const auto a_line = frame_arena_.allocate_array<GpuLineVertex>(std::max<u32>(line_vertex_count_, 1));
+    const auto a_cull = frame_arena_.allocate_array<GpuCullInstance>(std::max<usize>(n_inst, 1));
+    const auto a_cull_view = frame_arena_.allocate(sizeof(GpuCullView));
+    const auto a_uid = frame_arena_.allocate_array<u32>(std::max<usize>(n_inst, 1));
     if (!a_frame.valid() || !a_inst.valid() || !a_mat.valid() || !a_light.valid() || !a_joint.valid() ||
-        !a_line.valid()) {
+        !a_line.valid() || !a_cull.valid() || !a_cull_view.valid() || !a_uid.valid()) {
         cmd.pop_debug_group();
         return;
     }
 
     // ---- CPU culling (parallel) ----
-    resolve_instances(scene, static_cast<GpuInstance*>(a_inst.cpu));
+    resolve_instances(scene, static_cast<GpuInstance*>(a_inst.cpu),
+                      pick_this_frame_ ? static_cast<u32*>(a_uid.cpu) : nullptr);
     setup_cascades();
     cull_cascades(scene);
     build_draw_lists(scene);
+    if (gpu_.active) {
+        write_cull_data(static_cast<GpuCullInstance*>(a_cull.cpu), static_cast<GpuCullView*>(a_cull_view.cpu));
+        gpu_.candidates_gpu = a_cull.gpu;
+        gpu_.view_gpu = a_cull_view.gpu;
+        if (gpu_.occlusion) {
+            ensure_visibility_buffer(static_cast<u32>(n_inst));
+            gpu_.occlusion = visibility_buffer_.is_valid();
+        }
+    }
+    if (gpu_.active || pick_this_frame_) {
+        ensure_readback_buffer();
+    }
 
     // ---- uploads ----
     std::memcpy(a_mat.cpu, material_table_.data(), material_table_.size() * sizeof(GpuMaterial));
@@ -573,6 +794,7 @@ void RendererImpl::render(const RenderScene& scene, rhi::CommandList& cmd, const
     }
     GpuFrame frame;
     write_frame_constants(scene, frame, a_inst.gpu, a_mat.gpu, a_light.gpu, a_joint.gpu, a_line.gpu);
+    frame.user_ids = a_uid.gpu;
     std::memcpy(a_frame.cpu, &frame, sizeof(GpuFrame));
     frame_gpu_address_ = a_frame.gpu;
     stats_.lights = static_cast<u32>(gpu_lights_.size());
@@ -584,6 +806,13 @@ void RendererImpl::render(const RenderScene& scene, rhi::CommandList& cmd, const
 
     prev_view_proj_ = view_.unjittered_view_proj;
     has_prev_view_ = true;
+    if (gpu_.active) {
+        // GPU statistics arrive frames_in_flight frames late (never a stall).
+        stats_.instances_gpu_frustum_culled = gpu_stats_latched_[0];
+        stats_.instances_gpu_occlusion_culled = gpu_.occlusion ? gpu_stats_latched_[1] : 0u;
+        stats_.instances_visible = cpu_visible_ + gpu_stats_latched_[2];
+        stats_.triangles += gpu_stats_latched_[3];
+    }
     cmd.pop_debug_group();
     stats_.cpu_record_ms = (now_seconds() - t0) * 1000.0;
 }
@@ -649,15 +878,88 @@ void RendererImpl::build_graph(const RenderScene& scene, const RenderTarget& tar
             });
     }
 
+    // ---- GPU-driven culling buffers (ADR-0009) ----
+    // Counters: per-batch draw counts of both phases + statistics + pick id (kCounter*).
+    const bool gpu = gpu_.active;
+    const bool occlusion = gpu && gpu_.occlusion;
+    RGBuffer   counters;
+    RGBuffer   draws;
+    RGBuffer   visibility;
+    if (gpu || pick_this_frame_) {
+        RGBufferDesc cd;
+        cd.size = static_cast<u64>(kCounterWords) * sizeof(u32);
+        counters = g.create_buffer(cd, "GpuCull.Counters");
+        g.add_pass("GpuCull.Reset")
+            .write(counters, rhi::ResourceState::TransferDst)
+            .execute([counters](RGContext& ctx) { ctx.cmd.fill_buffer(ctx.buffer(counters), 0, ~0ull, 0u); });
+    }
+    if (gpu) {
+        RGBufferDesc dcd;
+        dcd.size = static_cast<u64>(gpu_.cmd_capacity) * 2 * sizeof(GpuDrawCommand); // phase 1 | phase 2
+        draws = g.create_buffer(dcd, "GpuCull.DrawCommands");
+        if (occlusion) {
+            visibility = g.import_buffer(visibility_buffer_, static_cast<u64>(visibility_capacity_) * sizeof(u32),
+                                         visibility_state_, rhi::ResourceState::ShaderWrite, "GpuCull.Visibility");
+            visibility_state_ = rhi::ResourceState::ShaderWrite;
+            if (visibility_clear_) {
+                // Nothing was visible "last frame": phase 1 draws nothing, phase 2 tests all.
+                visibility_clear_ = false;
+                g.add_pass("GpuCull.VisibilityReset")
+                    .write(visibility, rhi::ResourceState::TransferDst)
+                    .execute([visibility](RGContext& ctx) { ctx.cmd.fill_buffer(ctx.buffer(visibility), 0, ~0ull, 0u); });
+            }
+        }
+    }
+    // One culling dispatch. Phase 2 writes the second command/count region.
+    auto add_cull_pass = [&](const char* name, u32 phase, RGTexture hzb) {
+        RGPassBuilder pass = g.add_pass(name);
+        pass.write(draws, rhi::ResourceState::ShaderWrite).write(counters, rhi::ResourceState::ShaderWrite);
+        if (visibility.valid()) {
+            if (phase == kCullPhase2) {
+                pass.write(visibility, rhi::ResourceState::ShaderWrite);
+            } else {
+                pass.read(visibility, rhi::ResourceState::ShaderRead);
+            }
+        }
+        if (hzb.valid()) {
+            pass.read(hzb, rhi::ResourceState::ShaderRead);
+        }
+        pass.execute([this, draws, counters, visibility, phase, hzb](RGContext& ctx) {
+            if (hzb.valid() && gpu_.view_cpu != nullptr) {
+                gpu_.view_cpu->hzb_tex = ctx.sampled(hzb); // host-visible arena, read at submit
+            }
+            ctx.cmd.bind_pipeline(pipelines_->get(PipelineId::GpuCull));
+            const bool second = phase == kCullPhase2;
+            CullPush   c;
+            c.candidates = gpu_.candidates_gpu;
+            c.view = gpu_.view_gpu;
+            c.draws = ctx.address(draws) + (second ? static_cast<u64>(gpu_.cmd_capacity) * sizeof(GpuDrawCommand) : 0u);
+            c.counts = ctx.address(counters) + static_cast<u64>(second ? kCounterPhase2 : kCounterPhase1) * sizeof(u32);
+            c.stats = ctx.address(counters);
+            c.visibility = visibility.valid() ? ctx.address(visibility) : 0u;
+            c.count = gpu_.candidates;
+            c.phase = phase;
+            ctx.cmd.push_constants(rhi::ShaderStage::Compute, 0, sizeof(c), &c);
+            ctx.cmd.dispatch(groups(std::max(gpu_.candidates, 1u), kCullGroupSize), 1, 1);
+        });
+    };
+    if (gpu) {
+        add_cull_pass(occlusion ? "GpuCull.Phase1" : "GpuCull", occlusion ? kCullPhase1 : kCullPhaseFrustum, RGTexture{});
+    }
+
     // ---- depth prepass (reverse-Z: clear 0, GreaterEqual) ----
     RGTextureDesc dd;
     dd.format = kDepthFormat;
     dd.width = size.x;
     dd.height = size.y;
     const RGTexture depth = g.create_texture(dd, "SceneDepth");
-    g.add_pass("DepthPrepass")
-        .write(depth, rhi::ResourceState::DepthStencilAttachment)
-        .execute([this, depth, size, frame_addr](RGContext& ctx) {
+    {
+        RGPassBuilder pre = g.add_pass("DepthPrepass");
+        pre.write(depth, rhi::ResourceState::DepthStencilAttachment);
+        if (gpu) {
+            pre.read(draws, rhi::ResourceState::IndirectArgument).read(counters, rhi::ResourceState::IndirectArgument);
+        }
+        pre.execute([this, depth, size, frame_addr, gpu, draws, counters](RGContext& ctx) {
             rhi::RenderingInfo ri;
             ri.render_area = size;
             ri.has_depth = true;
@@ -669,9 +971,126 @@ void RendererImpl::build_graph(const RenderScene& scene, const RenderTarget& tar
             ctx.cmd.set_scissor(full_scissor(size));
             MeshPush push;
             push.frame = frame_addr;
-            draw_items(ctx.cmd, prepass_draws_, push, false);
+            if (gpu) {
+                draw_gpu_batches(ctx.cmd, MeshPass::Depth, ctx.buffer(draws), ctx.buffer(counters), push, true, false);
+            } else {
+                draw_items(ctx.cmd, prepass_draws_, push, false);
+            }
             ctx.cmd.end_rendering();
         });
+    }
+
+    // ---- two-phase Hi-Z occlusion culling (ADR-0009) ----
+    if (occlusion) {
+        // Mip 0 = largest power of two <= the depth extent per axis; full chain to 1x1.
+        const UVec2 hzb0(std::bit_floor(size.x), std::bit_floor(size.y));
+        const u32   hzb_mips = static_cast<u32>(std::bit_width(std::max(hzb0.x, hzb0.y)));
+        RGTextureDesc hd;
+        hd.format = rhi::Format::R32F;
+        hd.width = hzb0.x;
+        hd.height = hzb0.y;
+        hd.mip_levels = hzb_mips;
+        const RGTexture hzb = g.create_texture(hd, "HiZ");
+        if (gpu_.view_cpu != nullptr) {
+            gpu_.view_cpu->hzb_size = hzb0;
+            gpu_.view_cpu->hzb_mips = hzb_mips;
+        }
+        g.add_pass("HiZ.Build")
+            .read(depth, rhi::ResourceState::ShaderRead)
+            .write(hzb, rhi::ResourceState::ShaderWrite)
+            .execute([this, depth, hzb, size, hzb0, hzb_mips](RGContext& ctx) {
+                ctx.cmd.bind_pipeline(pipelines_->get(PipelineId::HiZBuild));
+                UVec2 src_size = size;
+                for (u32 m = 0; m < hzb_mips; ++m) {
+                    const UVec2 dst_size = glm::max(UVec2(hzb0.x >> m, hzb0.y >> m), UVec2(1));
+                    HiZPush     p;
+                    p.src = m == 0 ? ctx.sampled(depth) : ctx.storage(hzb, m - 1);
+                    p.dst = ctx.storage(hzb, m);
+                    p.src_size = src_size;
+                    p.dst_size = dst_size;
+                    p.from_depth = m == 0 ? 1u : 0u;
+                    ctx.cmd.push_constants(rhi::ShaderStage::Compute, 0, sizeof(p), &p);
+                    ctx.cmd.dispatch(groups(dst_size.x, kHiZGroupSize), groups(dst_size.y, kHiZGroupSize), 1);
+                    if (m + 1 < hzb_mips) {
+                        // Next level reads this one (whole-image barrier; all mips are General).
+                        ctx.cmd.barrier(ctx.texture(hzb), rhi::ResourceState::ShaderWrite, rhi::ResourceState::ShaderWrite);
+                    }
+                    src_size = dst_size;
+                }
+            });
+        add_cull_pass("GpuCull.Phase2", kCullPhase2, hzb);
+        g.add_pass("DepthPrepass.Phase2")
+            .write(depth, rhi::ResourceState::DepthStencilAttachment)
+            .read(draws, rhi::ResourceState::IndirectArgument)
+            .read(counters, rhi::ResourceState::IndirectArgument)
+            .execute([this, depth, size, frame_addr, draws, counters](RGContext& ctx) {
+                rhi::RenderingInfo ri;
+                ri.render_area = size;
+                ri.has_depth = true;
+                ri.depth.texture = ctx.texture(depth);
+                ri.depth.load = rhi::LoadOp::Load;
+                ri.depth.store = rhi::StoreOp::Store;
+                ctx.cmd.begin_rendering(ri);
+                ctx.cmd.set_viewport(full_viewport(size));
+                ctx.cmd.set_scissor(full_scissor(size));
+                MeshPush push;
+                push.frame = frame_addr;
+                draw_gpu_batches(ctx.cmd, MeshPass::Depth, ctx.buffer(draws), ctx.buffer(counters), push, false, true);
+                ctx.cmd.end_rendering();
+            });
+    }
+
+    // ---- picking: R32Uint id buffer over the final depth, one texel read back (ADR-0009) ----
+    if (pick_this_frame_) {
+        RGTextureDesc pd;
+        pd.format = kPickIdFormat;
+        pd.width = size.x;
+        pd.height = size.y;
+        const RGTexture ids = g.create_texture(pd, "Pick.Ids");
+        RGPassBuilder   pick = g.add_pass("Pick.Ids");
+        pick.write(ids, rhi::ResourceState::ColorAttachment).read(depth, rhi::ResourceState::DepthStencilAttachment);
+        if (gpu) {
+            pick.read(draws, rhi::ResourceState::IndirectArgument).read(counters, rhi::ResourceState::IndirectArgument);
+        }
+        pick.execute([this, ids, depth, size, frame_addr, gpu, draws, counters](RGContext& ctx) {
+            rhi::RenderingInfo ri;
+            ri.render_area = size;
+            ri.color.push_back(rhi::ColorAttachment{ ctx.texture(ids), 0, 0, rhi::LoadOp::Clear, rhi::StoreOp::Store,
+                                                     Vec4(0.0f) }); // 0 = nothing pickable
+            ri.has_depth = true;
+            ri.depth.texture = ctx.texture(depth);
+            ri.depth.load = rhi::LoadOp::Load;
+            ri.depth.store = rhi::StoreOp::Store;
+            ctx.cmd.begin_rendering(ri);
+            ctx.cmd.set_viewport(full_viewport(size));
+            ctx.cmd.set_scissor(full_scissor(size));
+            MeshPush push;
+            push.frame = frame_addr;
+            if (gpu) {
+                draw_gpu_batches(ctx.cmd, MeshPass::Pick, ctx.buffer(draws), ctx.buffer(counters), push, true, true);
+            } else {
+                std::vector<DrawItem> items(prepass_draws_.begin(), prepass_draws_.end());
+                for (DrawItem& d : items) {
+                    d.pipeline = mesh_pipeline_index(MeshPass::Pick, d.skinned, false, d.double_sided);
+                }
+                draw_items(ctx.cmd, items, push, false);
+            }
+            ctx.cmd.end_rendering();
+        });
+        const UVec2 pixel = pick_pixel_;
+        g.add_pass("Pick.Resolve")
+            .write(ids, rhi::ResourceState::ShaderWrite) // imageLoad (storage images live in General)
+            .write(counters, rhi::ResourceState::ShaderWrite)
+            .execute([this, ids, counters, pixel](RGContext& ctx) {
+                ctx.cmd.bind_pipeline(pipelines_->get(PipelineId::PickResolve));
+                PickPush p;
+                p.counters = ctx.address(counters);
+                p.id_img = ctx.storage(ids);
+                p.pixel = pixel;
+                ctx.cmd.push_constants(rhi::ShaderStage::Compute, 0, sizeof(p), &p);
+                ctx.cmd.dispatch(1, 1, 1);
+            });
+    }
 
     // ---- SSAO (half resolution + separable bilateral blur) ----
     RGTexture ao;
@@ -766,7 +1185,11 @@ void RendererImpl::build_graph(const RenderScene& scene, const RenderTarget& tar
         if (pipelines_->valid(PipelineId::LightCull)) {
             fwd.read(light_indices, rhi::ResourceState::ShaderRead);
         }
-        fwd.execute([this, hdr, depth, ao, light_grid, light_indices, size, frame_addr, overdraw](RGContext& ctx) {
+        if (gpu) {
+            fwd.read(draws, rhi::ResourceState::IndirectArgument).read(counters, rhi::ResourceState::IndirectArgument);
+        }
+        fwd.execute([this, hdr, depth, ao, light_grid, light_indices, size, frame_addr, overdraw, gpu, draws,
+                     counters](RGContext& ctx) {
             rhi::RenderingInfo ri;
             ri.render_area = size;
             ri.color.push_back(rhi::ColorAttachment{ ctx.texture(hdr), 0, 0, rhi::LoadOp::Clear,
@@ -798,7 +1221,12 @@ void RendererImpl::build_graph(const RenderScene& scene, const RenderTarget& tar
                 draw_items(ctx.cmd, all, push, true);
             } else {
                 ctx.cmd.push_debug_group("Opaque+Masked");
-                draw_items(ctx.cmd, opaque_draws_, push, true);
+                if (gpu) {
+                    draw_gpu_batches(ctx.cmd, MeshPass::Forward, ctx.buffer(draws), ctx.buffer(counters), push, true,
+                                     true);
+                } else {
+                    draw_items(ctx.cmd, opaque_draws_, push, true);
+                }
                 ctx.cmd.pop_debug_group();
 
                 if (pipelines_->valid(PipelineId::Sky)) {
@@ -1010,6 +1438,27 @@ void RendererImpl::build_graph(const RenderScene& scene, const RenderTarget& tar
                     ctx.cmd.end_rendering();
                 });
         }
+    }
+
+    // ---- CPU readback block (GPU statistics + pick id), consumed frames_in_flight later ----
+    if (counters.valid() && readback_buffer_.is_valid()) {
+        const u64      rb_size = static_cast<u64>(frames_in_flight_) * kReadbackWords * sizeof(u32);
+        const RGBuffer rb = g.import_buffer(readback_buffer_, rb_size, readback_state_, rhi::ResourceState::TransferDst,
+                                            "Renderer.Readback");
+        readback_state_ = rhi::ResourceState::TransferDst;
+        const u64 dst_offset = static_cast<u64>(frame_slot_) * kReadbackWords * sizeof(u32);
+        g.add_pass("Readback")
+            .read(counters, rhi::ResourceState::TransferSrc)
+            .write(rb, rhi::ResourceState::TransferDst)
+            .side_effect()
+            .execute([counters, rb, dst_offset](RGContext& ctx) {
+                ctx.cmd.copy_buffer(ctx.buffer(counters), ctx.buffer(rb), kReadbackWords * sizeof(u32),
+                                    kCounterStats * sizeof(u32), dst_offset);
+            });
+        ReadbackSlot& rs = readback_slots_[frame_slot_];
+        rs.pending = true;
+        rs.gpu_stats = gpu;
+        rs.pick = pick_this_frame_;
     }
 
     g.compile();

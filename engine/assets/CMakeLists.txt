@@ -6,6 +6,7 @@ aether_add_module(assets
         src/file_util.cpp
         src/format.cpp
         src/mesh_processing.cpp
+        src/texture_processing.cpp
         src/image_importer.cpp
         src/gltf_importer.cpp
         src/import.cpp
@@ -16,10 +17,12 @@ aether_add_module(assets
     PRIVATE_DEPS
         aether_cgltf
         aether_stb
+        aether_mikktspace
+        aether_bc7enc
         nlohmann_json::nlohmann_json)
 
 # ---------------------------------------------------------------------------
-# aether-cook <content_dir> <cooked_dir> [--force] [-j N]
+# aether-cook <content_dir> <cooked_dir> [--force] [--compress|--no-compress] [--no-mips] [-j N]
 # ---------------------------------------------------------------------------
 add_executable(aether-cook tools/cook/main.cpp)
 target_link_libraries(aether-cook PRIVATE aether::assets)
@@ -35,6 +38,7 @@ set_target_properties(aether-cook PROPERTIES FOLDER "tools")
 aether_add_test(assets
     tests/test_helpers.cpp
     tests/mesh_processing_tests.cpp
+    tests/texture_tests.cpp
     tests/import_tests.cpp
     tests/format_tests.cpp
     tests/database_tests.cpp

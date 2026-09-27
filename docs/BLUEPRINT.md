@@ -4,7 +4,7 @@
 > across rendering fidelity, editor/tooling, physics/animation, and scripting/gameplay.
 >
 > **Status:** Foundation phase (multi-session project). **Author:** Engine architect (orchestrator).
-> **Doc version:** 1.5 (ADR-0005 applied). Update this header on every material revision.
+> **Doc version:** 1.9 (ADR-0009 applied). Update this header on every material revision.
 
 ---
 
@@ -538,6 +538,8 @@ until it builds and its acceptance check passes.
 - **v1.5** — ADR-0005: the editor (Wave B complete).
 - **v1.6** — ADR-0006: the runtime player, project manifests and packaging; `AppDesc` cooked-asset fields.
 - **v1.7** — ADR-0007: golden-image render tests; `rhi::read_texture_rgba8` readback.
+- **v1.8** — ADR-0008: M1 baseline verified on Windows/MSVC/Intel Arc (build, tests, validation-clean runs, first hardware shadows, Arc golden references, Windows packaging).
+- **v1.9** — ADR-0009: M2 scope, additive contracts, three-agent wave.
 
 ---
 
@@ -838,3 +840,78 @@ Normals/Albedo views correctly passed) with diffs localised to the specular lobe
 
 **Not done yet:** references for a real GPU (the Intel Arc dev box), CI wiring, and cases for
 skinning, debug lines, cluster light counts at scale and the other debug views.
+
+---
+
+## ADR-0008 — Windows / MSVC / real-GPU verification of the M1 baseline (2026-09-26)
+
+**Context.** ADR-0004..0007 were built and verified on Linux (GCC 13, Mesa llvmpipe). They listed as
+unverified: the MSVC build, real-GPU rendering, the cascaded-shadow path (llvmpipe crashes sampling it),
+real-GPU golden references and a Windows packaging run. This session closed all of them on the dev box
+(Windows 11, MSVC 14.44, Intel Arc integrated, driver 101.8991, Vulkan 1.4.356, source-built
+VK_LAYER_KHRONOS_validation 1.4.328).
+
+**Results**
+| Check | Result |
+|---|---|
+| `msvc-x64-debug`, all 13 modules (core..scripting, gameplay, editor, runtime, samples, golden) | green, **0 warnings** in engine code |
+| ctest (13 suites incl. `assets.cook_samples`) | **13/13 pass** (18 s) |
+| `sandbox --frames 300 --test-resize` | exit 0, validation 0 errors / 0 warnings, 0 leaks |
+| `vertical_slice --frames 600 --check` | PASSED, 0 errors / 0 warnings / 0 VUIDs; shadows ON (first hardware run) |
+| `aether-editor --self-test` | PASSED, validation clean (2 WARN = intended self-parent rejection) |
+| `aether-player --frames 600 --check` | PASSED, validation clean |
+| golden cases on Arc (9, incl. `shadows`) | recorded after visual review to `tests/golden/reference/intel_r_arc_tm_graphics/`; compare re-run **bit-identical** (max diff 0) |
+| Arc vs llvmpipe | debug views, emissive_bloom, punctual_lights identical (MAE <= 0.01); PBR / translucency differ only by the shadows llvmpipe disables |
+| `aether-player --package` on Windows | 3 sources -> 15 cooked assets, 42 files; package run from `C:\` cooked-only: self-check PASSED, validation clean, engine root = package dir |
+
+**Fixes made during verification**
+- `engine/animation/tests/test_graph.cpp`: include `<ostream>` — MSVC's `operator<<(ostream&, string_view)`
+  needs the complete `basic_ostream` when doctest stringifies a `string_view` (libstdc++ provides it
+  transitively). The only MSVC break in ~16k lines of GCC-verified code.
+- `scripts/run.ps1`: documented invocation drops the `--` separator (Windows PowerShell 5.1 rejects it).
+
+**Status.** M0 and M1 are complete and verified on both platforms. The cascaded-shadow path is verified on
+hardware but not on llvmpipe (workaround stays). Next: M2 (ADR-0009).
+
+---
+
+## ADR-0009 — M2: GPU-driven rendering and tooling depth (2026-09-26)
+
+**Context.** M0/M1 are complete and verified on Linux/llvmpipe and Windows/Intel Arc (ADR-0008). Already
+done from the original M2 list: undo/redo, play-in-editor, blend trees + state machines, character
+controller. Remaining M2 scope plus the highest-value "not done yet" items from ADR-0004..0007 and the
+module reports, split into three agents with disjoint ownership (docs/AGENT_GUIDE.md).
+
+**Additive contract changes (orchestrator, compiled green across all 13 modules before fan-out)**
+- `render_scene.h`: `RenderMeshInstance::user_id` (0 = not pickable; gameplay writes entity index + 1).
+- `renderer.h`: `TextureUpload::mip_levels` (pre-built chains; required for BCn); `RendererSettings::
+  gpu_culling`, `occlusion_culling`; GPU culling stats; `Renderer::request_pick(UVec2)` /
+  `poll_pick()` (async, non-pure defaults so existing fakes/mocks keep compiling).
+- `asset_types.h`: `TextureFormat::BC7_SRGB`, `BC7_UNORM`, `BC5_UNORM` (cooker output, all mips present).
+- `rhi/enums.h`: `Format::BC7Unorm`.
+- gameplay glue (orchestrator): the render bridge fills `user_id`, maps the BC formats and passes cooked
+  mip chains through (`generate_mips` only when a single uncompressed mip is supplied).
+- Build: `cmake/deps/renderer.cmake` hook (OPTIONAL include); presets `m2-graphics`, `m2-assets`, `m2-editor`.
+
+**Agents and scope**
+1. **Graphics** (rhi + renderer + renderer shaders):
+   GPU-driven opaque path (GPU instance/draw buffers, compute frustum culling, `drawIndexedIndirectCount`,
+   material/pipeline batching); two-phase Hi-Z occlusion culling; picking id buffer + async readback
+   (`request_pick`/`poll_pick`); `TextureUpload::mip_levels` + BC1/3/5/7 uploads (`BC7Unorm` mapping);
+   `VertexAttribute::binding` (requested by renderer and RHI); JobSystem header docs. Stretch, in order:
+   mesh-shader meshlet path gated on `DeviceFeatures::mesh_shaders` (meshoptimizer via
+   `cmake/deps/renderer.cmake`), spot-light shadows.
+2. **Assets**: MikkTSpace tangents; cooker mip generation (sRGB-correct, box/Kaiser); BC7 (color / linear) +
+   BC5 (normals) compression in the cooker; animation of non-joint nodes; texture de-duplication (glTF image
+   also present as a standalone file); cooker mtime fast path.
+3. **Editor**: GPU picking via `request_pick` (CPU AABB fallback when unsupported); multi-select + group
+   transform; prefab assets (`.aeprefab`: create from selection, instantiate, drag in); asset-browser
+   drag-and-drop into viewport/hierarchy; material editor (`MaterialOverridesComponent` / built-ins); grid +
+   snapping; read-only animation state-machine view. Stretch: asset thumbnails.
+
+**Acceptance gates (orchestrator re-verifies on the Arc before accepting)**
+- `msvc-x64-debug` all modules green, 0 warnings; ctest all pass.
+- `vertical_slice --check`, `aether-editor --self-test`, `aether-player --check` pass validation-clean on the Arc.
+- Arc golden cases pass unchanged — the GPU-driven path must reproduce the CPU path's images. Any intended
+  visual change is re-recorded only after the images are reviewed, and reported.
+- New features carry tests (CPU where possible; golden cases for visual features).

@@ -96,16 +96,58 @@ bool guess_image_is_srgb(const fs::path& path) {
     return true;
 }
 
-Result<TextureData> import_image(const fs::path& path, const ImportSettings& settings) {
-    auto bytes = detail::read_file_bytes(path);
-    if (!bytes) return bytes.error();
+namespace {
+// Splits a lower-case stem into [a-z0-9]+ tokens.
+template <typename F>
+bool any_token(const String& stem, F&& pred) {
+    usize start = 0;
+    while (start <= stem.size()) {
+        usize end = start;
+        while (end < stem.size() && ((stem[end] >= 'a' && stem[end] <= 'z') || (stem[end] >= '0' && stem[end] <= '9')))
+            ++end;
+        if (pred(StringView(stem.data() + start, end - start))) return true;
+        start = end + 1;
+    }
+    return false;
+}
+} // namespace
+
+bool guess_image_is_normal_map(const fs::path& path) {
+    const String stem = detail::to_lower_ascii(detail::to_utf8(path.stem()));
+    if (stem.find("normal") != String::npos) return true;
+    static constexpr std::array<StringView, 5> kTokens{ "n", "nrm", "nor", "norm", "nml" };
+    return any_token(stem, [](StringView token) {
+        for (StringView t : kTokens) {
+            if (token == t) return true;
+        }
+        return false;
+    });
+}
+
+TextureRole standalone_image_role(const fs::path& path, const ImportSettings& settings) {
     bool srgb = true;
     switch (settings.image_color_space) {
     case ImageColorSpace::Srgb: srgb = true; break;
     case ImageColorSpace::Linear: srgb = false; break;
     case ImageColorSpace::Auto: srgb = guess_image_is_srgb(path); break;
     }
-    return decode_image(detail::bytes_of(*bytes), srgb, detail::to_utf8(path.filename()));
+    if (srgb) return TextureRole::Color;
+    return guess_image_is_normal_map(path) ? TextureRole::NormalMap : TextureRole::Data;
+}
+
+Result<TextureData> import_image(const fs::path& path, const ImportSettings& settings) {
+    auto bytes = detail::read_file_bytes(path);
+    if (!bytes) return bytes.error();
+    const TextureRole role = standalone_image_role(path, settings);
+    auto tex = decode_image(detail::bytes_of(*bytes), role == TextureRole::Color, detail::to_utf8(path.filename()));
+    if (!tex) return tex;
+    if (settings.generate_mips || settings.compress_textures) {
+        const TextureCookOptions options{ true, settings.compress_textures, settings.mip_filter };
+        if (auto r = cook_texture(*tex, role, options); !r) {
+            return Error{ r.error().code, std::format("{}: {}", detail::to_utf8(path.filename()), r.error().message) };
+        }
+    }
+    return tex;
 }
 
 } // namespace aether::assets

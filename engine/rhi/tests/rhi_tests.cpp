@@ -207,3 +207,30 @@ TEST_CASE("ResourceState -> sync2 mapping") {
     CHECK(vk::to_vk(Format::BGRA8Unorm) == VK_FORMAT_B8G8R8A8_UNORM);
     CHECK(vk::from_vk(VK_FORMAT_D32_SFLOAT) == Format::D32F);
 }
+
+TEST_CASE("ADR-0009: BC7Unorm mapping and BCn sizes") {
+    CHECK(vk::to_vk(Format::BC7Unorm) == VK_FORMAT_BC7_UNORM_BLOCK);
+    CHECK(vk::from_vk(VK_FORMAT_BC7_UNORM_BLOCK) == Format::BC7Unorm);
+    CHECK(vk::from_vk(VK_FORMAT_BC7_SRGB_BLOCK) == Format::BC7Srgb);
+    CHECK(vk::is_block_compressed(Format::BC7Unorm));
+    CHECK_FALSE(vk::is_srgb(Format::BC7Unorm));
+    CHECK(vk::subresource_bytes(Format::BC7Unorm, 16, 16, 1) == 16 * 16);
+    CHECK(vk::subresource_bytes(Format::BC5Unorm, 2, 2, 1) == 16); // tail mip: one block
+}
+
+TEST_CASE("ADR-0009: VertexAttribute::binding selects the source binding") {
+    GraphicsPipelineDesc d;
+    d.vertex_bindings = { VertexBinding{ 0, 48, false }, VertexBinding{ 1, 16, true } };
+    bool declared = false;
+    CHECK(vk::vertex_attribute_binding(d, VertexAttribute{ 0, 0, Format::RGB32F }, &declared) == 0);
+    CHECK(declared);
+    CHECK(vk::vertex_attribute_binding(d, VertexAttribute{ 4, 0, Format::RGBA32F, 1 }, &declared) == 1);
+    CHECK(declared);
+    CHECK(vk::vertex_attribute_binding(d, VertexAttribute{ 5, 0, Format::RGBA32F, 7 }, &declared) == 0);
+    CHECK_FALSE(declared); // undeclared -> first declared binding
+
+    // Pre-M2 layouts: one binding numbered != 0 and attributes that never set `binding`.
+    GraphicsPipelineDesc legacy;
+    legacy.vertex_bindings = { VertexBinding{ 3, 24, false } };
+    CHECK(vk::vertex_attribute_binding(legacy, VertexAttribute{ 0, 0, Format::RGB32F }) == 3);
+}

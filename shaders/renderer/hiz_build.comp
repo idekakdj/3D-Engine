@@ -1,0 +1,39 @@
+// shaders/renderer/hiz_build.comp — one level of the Hi-Z depth pyramid (ADR-0009).
+// Reverse-Z: nearer = larger depth, so the conservative occluder depth of a region is the
+// MINIMUM (farthest) depth. Level 0 reduces the depth buffer into a power-of-two mip 0 whose
+// texel t covers [t*src/dst, ceil((t+1)*src/dst)) - up to 3x3 depth texels for
+// non-power-of-two ratios - so no depth pixel is ever skipped; later levels are exact 2x2
+// (or 2x1 / 1x2 once one axis reaches 1) reductions.
+#version 460
+#extension GL_GOOGLE_include_directive : require
+#include "common/bindless.glsl"
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(push_constant, scalar) uniform HiZPush {
+    uint  src;        // depth (sampler2D) for level 0, else r32f storage view of the previous mip
+    uint  dst;        // r32f storage view of this mip
+    uvec2 src_size;
+    uvec2 dst_size;
+    uint  from_depth;
+    uint  pad;
+} pc;
+
+void main() {
+    uvec2 p = gl_GlobalInvocationID.xy;
+    if (any(greaterThanEqual(p, pc.dst_size))) {
+        return;
+    }
+    uvec2 lo = (p * pc.src_size) / pc.dst_size;
+    uvec2 hi = min(((p + 1u) * pc.src_size + pc.dst_size - 1u) / pc.dst_size, pc.src_size);
+    hi = max(hi, lo + 1u);
+    float farthest = 1.0;
+    for (uint y = lo.y; y < hi.y; ++y) {
+        for (uint x = lo.x; x < hi.x; ++x) {
+            float d = pc.from_depth != 0u ? texelFetch(AE_TEX2D(pc.src), ivec2(x, y), 0).r
+                                          : imageLoad(ae_img2d_r32f[pc.src], ivec2(x, y)).r;
+            farthest = min(farthest, d);
+        }
+    }
+    imageStore(ae_img2d_r32f[pc.dst], ivec2(p), vec4(farthest));
+}

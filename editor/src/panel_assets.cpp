@@ -1,4 +1,6 @@
-// panel_assets.cpp — content browser and the log console.
+// panel_assets.cpp — content browser (double-click / buttons / drag-and-drop sources) and the log
+// console. Files are dragged as an "AE_ASSET_PATH" payload (content-relative, NUL-terminated)
+// onto the viewport (placed at the cursor) or the hierarchy (instantiated as a child).
 #include "editor_app.h"
 
 #include "aether/editor/console.h"
@@ -39,6 +41,7 @@ const char* kind_of(const std::filesystem::path& p) {
     const std::string e = p.extension().string();
     if (e == ".gltf" || e == ".glb") return "model";
     if (e == ".aescene") return "scene";
+    if (e == ".aeprefab") return "prefab";
     if (e == ".lua") return "script";
     if (e == ".png" || e == ".jpg" || e == ".hdr" || e == ".ktx2") return "image";
     if (e == ".json") return "data";
@@ -109,12 +112,21 @@ void EditorApp::draw_assets() {
                     instantiate_asset(d.path);
                 }
             }
+            if (!d.directory && ImGui::BeginDragDropSource()) {
+                const std::string payload = d.path.generic_string();
+                ImGui::SetDragDropPayload("AE_ASSET_PATH", payload.c_str(), payload.size() + 1);
+                ImGui::Text("%s (%s)", d.path.filename().string().c_str(), kind_of(d.path));
+                ImGui::EndDragDropSource();
+            }
             ImGui::TableNextColumn();
             ImGui::TextDisabled("%s", d.directory ? "folder" : kind_of(d.path));
             ImGui::TableNextColumn();
             if (!d.directory) {
                 const std::string kind   = kind_of(d.path);
-                const char*       action = kind == "model" ? "Add to scene" : kind == "scene" ? "Open" : kind == "script" ? "Attach" : nullptr;
+                const char*       action = kind == "model" || kind == "prefab" ? "Add to scene"
+                                               : kind == "scene"                   ? "Open"
+                                               : kind == "script"                  ? "Attach"
+                                                                                   : nullptr;
                 if (action != nullptr) {
                     const bool enabled = kind != "scene" || play_state_ == PlayState::Edit;
                     ImGui::BeginDisabled(!enabled);

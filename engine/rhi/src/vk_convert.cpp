@@ -30,12 +30,13 @@ VkFormat to_vk(Format f) {
     case Format::BC3Srgb: return VK_FORMAT_BC3_SRGB_BLOCK;
     case Format::BC5Unorm: return VK_FORMAT_BC5_UNORM_BLOCK;
     case Format::BC7Srgb: return VK_FORMAT_BC7_SRGB_BLOCK;
+    case Format::BC7Unorm: return VK_FORMAT_BC7_UNORM_BLOCK;
     }
     return VK_FORMAT_UNDEFINED;
 }
 
 Format from_vk(VkFormat f) {
-    for (u16 i = 0; i <= static_cast<u16>(Format::BC7Srgb); ++i) {
+    for (u16 i = 0; i <= static_cast<u16>(Format::BC7Unorm); ++i) {
         if (to_vk(static_cast<Format>(i)) == f) {
             return static_cast<Format>(i);
         }
@@ -205,7 +206,8 @@ bool is_srgb(Format f) {
 }
 
 bool is_block_compressed(Format f) {
-    return f == Format::BC1Srgb || f == Format::BC3Srgb || f == Format::BC5Unorm || f == Format::BC7Srgb;
+    return f == Format::BC1Srgb || f == Format::BC3Srgb || f == Format::BC5Unorm || f == Format::BC7Srgb ||
+           f == Format::BC7Unorm;
 }
 
 Format srgb_to_unorm(Format f) {
@@ -252,13 +254,29 @@ u32 format_block_bytes(Format f) {
     case Format::BC1Srgb: return 8;
     case Format::BC3Srgb:
     case Format::BC5Unorm:
-    case Format::BC7Srgb: return 16;
+    case Format::BC7Srgb:
+    case Format::BC7Unorm: return 16;
     }
     return 0;
 }
 
 u32 format_block_dim(Format f) {
     return is_block_compressed(f) ? 4u : 1u;
+}
+
+u32 vertex_attribute_binding(const GraphicsPipelineDesc& desc, const VertexAttribute& a, bool* declared) {
+    for (const VertexBinding& b : desc.vertex_bindings) {
+        if (b.binding == a.binding) {
+            if (declared) {
+                *declared = true;
+            }
+            return a.binding;
+        }
+    }
+    if (declared) {
+        *declared = false;
+    }
+    return desc.vertex_bindings.empty() ? a.binding : desc.vertex_bindings[0].binding;
 }
 
 u64 subresource_bytes(Format f, u32 width, u32 height, u32 depth) {

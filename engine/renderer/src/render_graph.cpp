@@ -97,8 +97,10 @@ u32 RGResourcePool::acquire_texture(const RGTextureDesc& desc, std::string_view 
     t.last_used_frame = frame_;
     t.storage.assign(td.mip_levels, rhi::DescriptorHandle{});
     if (t.handle.is_valid() && any(desc.usage & rhi::TextureUsage::Sampled)) {
+        // Depth, 32-bit float and integer formats are fetched, never filtered: point sampler
+        // (32-bit float linear filtering is optional in Vulkan).
         const rhi::SamplerHandle s =
-            is_depth_format(desc.format) ? samplers_.point_clamp : samplers_.linear_clamp;
+            needs_point_sampler(desc.format) ? samplers_.point_clamp : samplers_.linear_clamp;
         t.sampled = device_.register_texture(t.handle, s);
     }
     if (!t.handle.is_valid()) {

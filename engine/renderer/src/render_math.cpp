@@ -2,6 +2,7 @@
 #include "render_math.h"
 
 #include <algorithm>
+#include <bit>
 #include <cmath>
 
 namespace aether::renderer {
@@ -188,6 +189,95 @@ f32 distance_attenuation(f32 distance, f32 range) {
     const f32 ratio = d2 / (r * r);
     const f32 window = std::clamp(1.0f - ratio * ratio, 0.0f, 1.0f);
     return (window * window) / std::max(d2, 1e-4f);
+}
+
+// ---------------------------------------------------------------------------
+// Hi-Z (mirrors shaders/renderer/hiz_build.comp and gpu_cull.comp)
+// ---------------------------------------------------------------------------
+UVec2 hiz_mip0_size(UVec2 depth_size) {
+    return UVec2(std::bit_floor(std::max(depth_size.x, 1u)), std::bit_floor(std::max(depth_size.y, 1u)));
+}
+
+u32 hiz_mip_count(UVec2 mip0) { return static_cast<u32>(std::bit_width(std::max(mip0.x, mip0.y))); }
+
+HiZPyramid build_hiz(std::span<const f32> depth, UVec2 depth_size) {
+    HiZPyramid  h;
+    const UVec2 size0 = hiz_mip0_size(depth_size);
+    const u32   mips = hiz_mip_count(size0);
+    UVec2       src_size = depth_size;
+    const f32*  src = depth.data();
+    for (u32 m = 0; m < mips; ++m) {
+        const UVec2 dst(std::max(size0.x >> m, 1u), std::max(size0.y >> m, 1u));
+        std::vector<f32> out(static_cast<usize>(dst.x) * dst.y, 1.0f);
+        for (u32 y = 0; y < dst.y; ++y) {
+            for (u32 x = 0; x < dst.x; ++x) {
+                const u32 lx = (x * src_size.x) / dst.x;
+                const u32 ly = (y * src_size.y) / dst.y;
+                const u32 hx = std::max(std::min(((x + 1) * src_size.x + dst.x - 1) / dst.x, src_size.x), lx + 1);
+                const u32 hy = std::max(std::min(((y + 1) * src_size.y + dst.y - 1) / dst.y, src_size.y), ly + 1);
+                f32 farthest = 1.0f;
+                for (u32 sy = ly; sy < hy; ++sy) {
+                    for (u32 sx = lx; sx < hx; ++sx) {
+                        farthest = std::min(farthest, src[static_cast<usize>(sy) * src_size.x + sx]);
+                    }
+                }
+                out[static_cast<usize>(y) * dst.x + x] = farthest;
+            }
+        }
+        h.sizes.push_back(dst);
+        h.levels.push_back(std::move(out));
+        src = h.levels.back().data();
+        src_size = dst;
+    }
+    return h;
+}
+
+bool hiz_occluded(const HiZPyramid& hiz, UVec2 depth_size, UVec2 px0, UVec2 px1, f32 nearest) {
+    if (hiz.levels.empty()) {
+        return false;
+    }
+    const UVec2 size0 = hiz.sizes[0];
+    const UVec2 t0((px0.x * size0.x) / depth_size.x, (px0.y * size0.y) / depth_size.y);
+    const UVec2 t1((px1.x * size0.x) / depth_size.x, (px1.y * size0.y) / depth_size.y);
+    const u32   mips = static_cast<u32>(hiz.levels.size());
+    u32         lvl = 0;
+    while (lvl + 1 < mips && (((t1.x >> lvl) - (t0.x >> lvl)) > 1u || ((t1.y >> lvl) - (t0.y >> lvl)) > 1u)) {
+        ++lvl;
+    }
+    const UVec2 ls = hiz.sizes[lvl];
+    const UVec2 a(std::min(t0.x >> lvl, ls.x - 1), std::min(t0.y >> lvl, ls.y - 1));
+    const UVec2 b(std::min(t1.x >> lvl, ls.x - 1), std::min(t1.y >> lvl, ls.y - 1));
+    f32 farthest = 1.0f;
+    for (u32 y = a.y; y <= b.y; ++y) {
+        for (u32 x = a.x; x <= b.x; ++x) {
+            farthest = std::min(farthest, hiz.levels[lvl][static_cast<usize>(y) * ls.x + x]);
+        }
+    }
+    return nearest < farthest;
+}
+
+bool project_aabb_rect(const Mat4& view_proj, const AABB& box, UVec2 viewport, UVec2& px0, UVec2& px1,
+                       f32& nearest) {
+    Vec2 mn(3.0e38f), mx(-3.0e38f);
+    nearest = 0.0f;
+    for (u32 k = 0; k < 8; ++k) {
+        const Vec3 c((k & 1u) ? box.max.x : box.min.x, (k & 2u) ? box.max.y : box.min.y,
+                     (k & 4u) ? box.max.z : box.min.z);
+        const Vec4 clip = view_proj * Vec4(c, 1.0f);
+        if (clip.w <= 1e-5f) {
+            return false;
+        }
+        const Vec3 ndc = Vec3(clip) / clip.w;
+        mn = glm::min(mn, Vec2(ndc));
+        mx = glm::max(mx, Vec2(ndc));
+        nearest = std::max(nearest, ndc.z);
+    }
+    const Vec2 vp(viewport);
+    const Vec2 uv0 = glm::clamp(mn * 0.5f + 0.5f, Vec2(0.0f), Vec2(1.0f));
+    const Vec2 uv1 = glm::clamp(mx * 0.5f + 0.5f, Vec2(0.0f), Vec2(1.0f));
+    px0 = UVec2(glm::min(glm::floor(uv0 * vp), vp - 1.0f));
+    px1 = UVec2(glm::min(glm::floor(uv1 * vp), vp - 1.0f));
+    return true;
 }
 
 } // namespace aether::renderer

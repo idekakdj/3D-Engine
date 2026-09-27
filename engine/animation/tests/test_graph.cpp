@@ -2,6 +2,7 @@
 #include "aether/animation/anim_graph.h"
 #include "anim_test_utils.h"
 
+#include <ostream> // MSVC: doctest stringifies std::string_view via operator<<, which needs the full ostream
 #include <vector>
 
 using namespace anim_test;

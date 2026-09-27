@@ -1,0 +1,19 @@
+// shaders/renderer/pick_resolve.comp — copies the id under the requested pixel into the
+// counter buffer, whose readback block reaches the CPU frames_in_flight frames later.
+#version 460
+#extension GL_GOOGLE_include_directive : require
+#include "common/bindless.glsl"
+#include "cull_data.glsl"
+
+layout(local_size_x = 1) in;
+
+layout(push_constant, scalar) uniform PickPush {
+    CounterBuffer counters;
+    uint          id_img; // r32ui storage view of the id buffer
+    uint          pad;
+    uvec2         pixel;
+} pc;
+
+void main() {
+    pc.counters.values[AE_COUNTER_PICK] = imageLoad(ae_img2d_r32ui[pc.id_img], ivec2(pc.pixel)).r;
+}

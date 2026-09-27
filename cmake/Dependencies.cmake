@@ -21,6 +21,7 @@ ae_module_enabled(assets    engine/assets    AE_WITH_ASSETS)
 ae_module_enabled(physics   engine/physics   AE_WITH_PHYSICS)
 ae_module_enabled(scripting engine/scripting AE_WITH_SCRIPTING)
 ae_module_enabled(editor    editor           AE_WITH_EDITOR)
+ae_module_enabled(renderer  engine/renderer  AE_WITH_RENDERER)
 
 # ===========================================================================
 # Always: Vulkan headers + volk (core's Window uses volk for glfwInitVulkanLoader),
@@ -98,6 +99,10 @@ if(AE_WITH_SCRIPTING)
 endif()
 if(AE_WITH_EDITOR)
     include(deps/editor)
+endif()
+# ADR-0009: renderer-owned deps (e.g. meshoptimizer for meshlets). OPTIONAL: absent until needed.
+if(AE_WITH_RENDERER)
+    include(deps/renderer OPTIONAL)
 endif()
 
 # Group fetched targets in IDEs.

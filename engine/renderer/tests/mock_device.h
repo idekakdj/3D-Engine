@@ -17,6 +17,11 @@
 
 namespace aether::renderer::test {
 
+struct MockMipUpload {
+    u32 texture = 0, mip = 0, layer = 0;
+    u64 bytes = 0;
+};
+
 struct MockState {
     std::unordered_map<u32, rhi::ResourceState> texture_state;
     std::unordered_map<u32, rhi::TextureDesc>   textures;
@@ -24,6 +29,8 @@ struct MockState {
     std::unordered_map<u32, std::vector<byte>>  mapped;
     std::vector<std::string>                    errors;
     std::vector<std::string>                    log; // "barrier <tex> A->B", "group <name>", ...
+    std::vector<MockMipUpload>                  mip_uploads;
+    u32 indirect_count_draws = 0, invalidations = 0;
     u32 textures_created = 0, textures_destroyed = 0;
     u32 buffers_created = 0, buffers_destroyed = 0;
     u32 pipelines_created = 0, draws = 0, dispatches = 0;
@@ -72,7 +79,12 @@ public:
     void draw(u32, u32, u32, u32) override { on_draw(); }
     void draw_indexed(u32, u32, u32, i32, u32) override { on_draw(); }
     void draw_indexed_indirect(rhi::BufferHandle, u64, u32, u32) override { on_draw(); }
-    void draw_indexed_indirect_count(rhi::BufferHandle, u64, rhi::BufferHandle, u64, u32, u32) override { on_draw(); }
+    void draw_indexed_indirect_count(rhi::BufferHandle a, u64, rhi::BufferHandle c, u64, u32, u32) override {
+        check_buffer(a);
+        check_buffer(c);
+        ++s_.indirect_count_draws;
+        on_draw();
+    }
     void dispatch(u32, u32, u32) override {
         if (in_rendering_) {
             err("dispatch inside rendering scope");
@@ -161,6 +173,7 @@ public:
         features_.dynamic_rendering = features_.timeline_semaphores = features_.synchronization2 = true;
         features_.descriptor_indexing = features_.buffer_device_address = true;
         features_.depth_clamp = features_.sampler_anisotropy = true;
+        features_.texture_compression_bc = true;
         features_.max_bindless_textures = 1u << 16;
         features_.adapter_name = "MockDevice";
     }
@@ -169,6 +182,8 @@ public:
     MockCommandList cmd_;
 
     const rhi::DeviceFeatures& features() const override { return features_; }
+    // Tests toggle optional features (e.g. draw_indirect_count for the GPU-driven path).
+    rhi::DeviceFeatures& mutable_features() { return features_; }
     u32 frames_in_flight() const override { return 2; }
 
     rhi::BufferHandle create_buffer(const rhi::BufferDesc& d) override {
@@ -244,10 +259,23 @@ public:
         return mem.data();
     }
     void unmap(rhi::BufferHandle) override {}
+    void invalidate_mapped(rhi::BufferHandle h) override {
+        if (!state.buffers.contains(h.value)) {
+            state.errors.push_back(std::format("invalidate_mapped on unknown buffer {}", h.value));
+        }
+        ++state.invalidations;
+    }
     void update_texture(rhi::TextureHandle h, ByteSpan, bool) override {
         state.texture_state[h.value] = rhi::ResourceState::ShaderRead;
     }
-    void update_texture_mip(rhi::TextureHandle, u32, u32, ByteSpan) override {}
+    void update_texture_mip(rhi::TextureHandle h, u32 mip, u32 layer, ByteSpan data) override {
+        const auto it = state.textures.find(h.value);
+        if (it == state.textures.end() || mip >= it->second.mip_levels || layer >= it->second.array_layers) {
+            state.errors.push_back(std::format("update_texture_mip out of range on {}", h.value));
+        }
+        state.mip_uploads.push_back(MockMipUpload{ h.value, mip, layer, data.size() });
+        state.texture_state[h.value] = rhi::ResourceState::ShaderRead;
+    }
 
     rhi::DescriptorHandle register_texture(rhi::TextureHandle, rhi::SamplerHandle) override {
         return rhi::DescriptorHandle(next_desc_++, 1);

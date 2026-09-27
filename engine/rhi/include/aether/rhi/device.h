@@ -49,12 +49,14 @@ struct DeviceFeatures {
     bool descriptor_indexing = false; // bindless
     bool buffer_device_address = false;
     bool draw_indirect_count = false;
+    bool draw_indirect_first_instance = false; // ADR-0009 (additive): non-zero firstInstance in indirect draws
     bool mesh_shaders = false;
     bool ray_tracing = false;
     bool wide_lines = false;          // false on Intel Arc (ADR-0001)
     bool fill_mode_non_solid = false; // gate wireframe on this
     bool depth_clamp = false;
     bool sampler_anisotropy = false;
+    bool texture_compression_bc = false; // ADR-0009 (additive): BC1..BC7 sampled textures
     u32  max_bindless_textures = 0;
     u32  max_push_constant_bytes = 128;
     std::string adapter_name;
@@ -120,6 +122,10 @@ public:
     virtual void  update_buffer(BufferHandle, ByteSpan data, u64 dst_offset = 0) = 0;
     virtual void* map(BufferHandle) = 0;   // CpuToGpu / GpuToCpu / CpuOnly only; persistent
     virtual void  unmap(BufferHandle) = 0;
+    // ADR-0009 (additive): before the CPU reads a mapped GpuToCpu buffer that GPU work wrote,
+    // make those writes visible (invalidates non-coherent memory; no-op when coherent). The
+    // writing frame must have completed (e.g. frames_in_flight() begin_frame()s later).
+    virtual void  invalidate_mapped(BufferHandle) {}
     // Mip 0 of every layer, tightly packed; generates the remaining mips if requested.
     // Leaves the texture in ResourceState::ShaderRead.
     virtual void  update_texture(TextureHandle, ByteSpan data, bool gen_mips = true) = 0;

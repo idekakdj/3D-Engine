@@ -23,6 +23,9 @@ integration; work that violates them is sent back.
 | editor agent | `editor/**`, `cmake/deps/editor.cmake` |
 | runtime agent | `runtime/**`, `game.aeproject` |
 | test agent | `tests/**` (golden references are re-recorded only for an intended visual change, with the images reviewed) |
+| M2 graphics agent (ADR-0009) | `engine/rhi/**`, `engine/renderer/**`, `shaders/renderer/**`, `shaders/sandbox/**`, `samples/sandbox/**`, `cmake/deps/rhi.cmake`, `cmake/deps/renderer.cmake`; new golden cases + reviewed re-records under `tests/golden/**` for its own features |
+| M2 assets agent (ADR-0009) | `engine/assets/**`, `cmake/deps/assets.cmake`, `content/samples/**` |
+| M2 editor agent (ADR-0009) | `editor/**`, `cmake/deps/editor.cmake` |
 | validation agent | `scripts/provision_validation.ps1`, `C:/Users/paulc/.aether/tools/vvl/**` |
 
 Never edit another owner's files. If you need something from another module, code against
@@ -57,7 +60,7 @@ C:/Users/paulc/.aether/build/wip-<module>/bin/test.<module>.exe
 ```
 
 - Use **only your preset** (`wip-core-rhi`, `wip-scene`, `wip-assets`, `wip-renderer`, `wip-physics`,
-  `wip-animation`, `wip-scripting`, `wip-gameplay`, `wip-editor`). Never touch `msvc-x64-*` (orchestrator's) or another agent's preset.
+  `wip-animation`, `wip-scripting`, `wip-gameplay`, `wip-editor`, and for M2 `m2-graphics`, `m2-assets`, `m2-editor`). Never touch `msvc-x64-*` (orchestrator's) or another agent's preset.
 - The machine has **16 GB RAM** shared by ~8 concurrent builds: never raise the preset's job count. If MSVC
   fails with an out-of-memory error (C1060, C1076, C3859, "heap space"), it is contention, not your code:
   retry with `-Jobs 2`.
