@@ -1100,7 +1100,7 @@ imports new / changed sources before the startup scene loads. Fresh database: 6 
 
 ## ADR-0013 — The downloadable application: packaging and the user workspace (2026-09-27)
 
-**Status:** accepted; verified on Linux (packaged build); Windows installer run pending. Implements
+**Status:** accepted; verified on Linux and on Windows (installer + smoke test). Implements
 the "Delivery" requirement of §1.1 (ADR-0012).
 
 **Decisions**
@@ -1139,8 +1139,11 @@ unchanged afterwards, and the player still passes with the repository's `shaders
 source-tree dependency). `test.runtime` +4 cases (marker, writability probe, Documents override,
 starter project created once and never overwritten, dev vs installed). Debug tree: ctest 26/26.
 
-**Pending (Windows):** first run of `scripts/package.ps1 -SmokeTest` (PowerShell could not be run
-here), installing `AetherSetup` and checking the Start menu / desktop shortcuts and the uninstaller.
+**Verified on Windows (owner's Intel Arc PC, 2026-09-27).** `scripts/package.ps1 -SmokeTest` built the
+Release packages (ZIP + Inno Setup installer) and the packaged-build smoke test passed on all four
+checks: installed editor self-test PASSED, installed player check PASSED, starter project created in
+Documents, install folder unchanged. The setup `.exe` installed, the editor launched from the
+installer, the Start menu and desktop shortcuts, and the uninstall were exercised by the owner.
 
 **Not done yet:** offline shader precompilation (shaders still compile at startup; the pipeline cache
 makes later starts fast), an application icon and version resource, code signing (unsigned installers
