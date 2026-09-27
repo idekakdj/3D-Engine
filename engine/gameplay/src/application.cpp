@@ -219,6 +219,10 @@ Result<void> Application::initialize() {
     ac.content_root = s.desc.content_root.empty() ? paths::content_dir() : s.desc.content_root;
     ac.cooked_root  = s.desc.cooked_root; // empty => paths::asset_dir()
     ac.mode         = s.desc.cooked_assets_only ? assets::AssetLoadMode::Runtime : assets::AssetLoadMode::Editor;
+    // Source mode: scenes reference assets by AssetId only, and an id cannot be traced back to its
+    // source file, so every source must be in the database before a scene loads. The scan is
+    // incremental (size + mtime fast path): only new or changed sources are imported.
+    ac.scan_on_startup = !s.desc.cooked_assets_only;
     if (auto a = s.assets->initialize(ac); !a) {
         return a.error();
     }

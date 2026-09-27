@@ -1080,3 +1080,14 @@ after reviewing the Arc image, and confirm the other Arc goldens still match.
 
 **Not done:** point-light (cube) shadows, shadow caching for static lights, and the sun + spot shadow
 interaction in the ShadowCascades debug view.
+
+**Fix found during the Arc walkthrough: models missing from scenes on a fresh checkout.** Scenes
+reference assets by AssetId only; in source (Editor) mode a source was imported only when something
+asked for it by *path*, so on a machine whose `assets/asset_db.json` did not already list the glTF
+sources, `showcase.aescene`'s textured cube and skinned model failed with "not in the asset
+database" (reported on the Arc; reproduced on Linux after deleting `assets/`; earlier Linux runs had
+passed on a database left by previous sessions). `Application` now enables
+`AssetManagerConfig::scan_on_startup` in source mode: an incremental scan (size + mtime fast path)
+imports new / changed sources before the startup scene loads. Fresh database: 6 sources imported,
+`aether-player --check` passes; second run: 6 up to date. Cooked (shipping) mode is unchanged.
+
