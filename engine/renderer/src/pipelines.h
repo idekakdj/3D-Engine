@@ -37,6 +37,9 @@ struct ShaderSource {
 struct PipelineSpec {
     std::string               name;
     bool                      compute = false;
+    // ADR-0010: mesh-shading pipeline. `vs` then holds the MESH shader and `ts` the task shader.
+    bool                      mesh_shading = false;
+    ShaderSource              ts;
     ShaderSource              vs;
     ShaderSource              fs;
     ShaderSource              cs;
@@ -75,6 +78,14 @@ enum class PipelineId : u32 {
 inline constexpr u32 kPipelineCount = static_cast<u32>(PipelineId::Count);
 [[nodiscard]] constexpr u32 pipeline_index(PipelineId id) noexcept { return static_cast<u32>(id); }
 
+// ---- meshlet pipelines (ADR-0010; follow the fixed pipelines) ----
+// Task + mesh shader variants of the passes the GPU-driven path draws (static meshes only):
+// Depth (masked x double-sided), Forward (double-sided), Pick (double-sided). The slots stay
+// empty (invalid pipelines) on devices without mesh shaders.
+inline constexpr u32 kMeshletPipelineCount = 8;
+inline constexpr u32 kPipelineTableSize = kPipelineCount + kMeshletPipelineCount;
+[[nodiscard]] u32 meshlet_pipeline_index(MeshPass pass, bool masked, bool double_sided);
+
 // Defines injected into every shader (constants shared with gpu_data.h).
 [[nodiscard]] std::vector<rhi::ShaderDefine> shared_shader_defines();
 
@@ -111,7 +122,7 @@ public:
 private:
     struct Entry {
         PipelineSpec                                           spec;
-        rhi::ShaderHandle                                      vs, fs, cs;
+        rhi::ShaderHandle                                      ts, vs, fs, cs;
         rhi::PipelineHandle                                    pipeline;
         std::vector<std::pair<rhi::Format, rhi::PipelineHandle>> variants;
         bool                                                   failed_logged = false;
@@ -125,7 +136,7 @@ private:
     // Compiles (or fetches from `cache`) one shader module.
     rhi::ShaderHandle compile(const ShaderSource& src, std::vector<CompiledShader>& cache,
                               std::string& errors);
-    rhi::PipelineHandle create(const Entry& e, rhi::ShaderHandle vs, rhi::ShaderHandle fs,
+    rhi::PipelineHandle create(const Entry& e, rhi::ShaderHandle ts, rhi::ShaderHandle vs, rhi::ShaderHandle fs,
                                rhi::ShaderHandle cs, rhi::Format color_override);
     void destroy_unreferenced_shaders();
 

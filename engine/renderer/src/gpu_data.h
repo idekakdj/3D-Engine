@@ -181,8 +181,11 @@ static_assert(sizeof(GpuFrame) == 1016);
 // ---------------------------------------------------------------------------
 // Opaque/masked candidates are grouped into batches by pipeline permutation and vertex
 // arena (materials are bindless, so they never split a batch):
-//   batch = skinned * 8 + masked * 4 + double_sided * 2 + skin_arena
-inline constexpr u32 kMaxDrawBatches = 16;
+//   batch = meshlet * 16 + skinned * 8 + masked * 4 + double_sided * 2 + skin_arena
+// Meshlet batches (ADR-0010, static meshes on mesh-shading devices) are drawn with
+// vkCmdDrawMeshTasksIndirectCountEXT; their command slot holds a GpuMeshTaskCommand.
+inline constexpr u32 kMaxDrawBatches = 32;
+inline constexpr u32 kBatchMeshlet = 16;
 inline constexpr u32 kCullGroupSize = 64;
 inline constexpr u32 kHiZGroupSize = 8;
 
@@ -192,8 +195,8 @@ inline constexpr u32 kCullFlagNeverCull = 1u << 0;
 // Counter buffer (u32 words): per-batch draw counts of both phases, then the statistics
 // and the pick result, which are copied to the CPU readback ring as one block.
 inline constexpr u32 kCounterPhase1 = 0;                      // [0, 16)
-inline constexpr u32 kCounterPhase2 = kMaxDrawBatches;        // [16, 32)
-inline constexpr u32 kCounterStats = 2 * kMaxDrawBatches;     // 32: first word copied back
+inline constexpr u32 kCounterPhase2 = kMaxDrawBatches;        // [32, 64)
+inline constexpr u32 kCounterStats = 2 * kMaxDrawBatches;     // 64: first word copied back
 inline constexpr u32 kCounterFrustumCulled = kCounterStats + 0;
 inline constexpr u32 kCounterOcclusionCulled = kCounterStats + 1;
 inline constexpr u32 kCounterVisible = kCounterStats + 2;
@@ -208,8 +211,9 @@ inline constexpr u32 kCullPhase1 = 1;       // frustum + visible last frame
 inline constexpr u32 kCullPhase2 = 2;       // frustum + Hi-Z occlusion; not drawn in phase 1
 
 [[nodiscard]] constexpr u32 draw_batch_index(bool skinned, bool masked, bool double_sided,
-                                             bool skin_arena) noexcept {
-    return (skinned ? 8u : 0u) | (masked ? 4u : 0u) | (double_sided ? 2u : 0u) | (skin_arena ? 1u : 0u);
+                                             bool skin_arena, bool meshlet = false) noexcept {
+    return (meshlet ? kBatchMeshlet : 0u) | (skinned ? 8u : 0u) | (masked ? 4u : 0u) | (double_sided ? 2u : 0u) |
+           (skin_arena ? 1u : 0u);
 }
 
 struct GpuCullInstance {
@@ -221,9 +225,50 @@ struct GpuCullInstance {
     u32  index_count = 0;    // 36
     i32  vertex_offset = 0;  // 40
     u32  flags = 0;          // 44 kCullFlag*
+    // ADR-0010: meshlet batches only (the submesh's meshlets; see GpuMeshlet).
+    u64  meshlets = 0;       // 48 GpuMeshlet array (device address)
+    u64  meshlet_words = 0;  // 56 u32 vertex-index / packed-triangle words of the mesh
+    u32  meshlet_count = 0;  // 64
+    u32  pad[3]{};           // 68
 };
-static_assert(sizeof(GpuCullInstance) == 48);
+static_assert(sizeof(GpuCullInstance) == 80);
 static_assert(offsetof(GpuCullInstance, batch) == 28);
+static_assert(offsetof(GpuCullInstance, meshlets) == 48);
+static_assert(offsetof(GpuCullInstance, meshlet_count) == 64);
+
+// ---------------------------------------------------------------------------
+// Meshlets (ADR-0010). Built per submesh by meshoptimizer at register_mesh(); one GPU buffer per
+// mesh holds [GpuMeshlet x n | u32 words]. Words: vertex indices (relative to the mesh's first
+// vertex) and triangles packed as i0 | i1 << 8 | i2 << 16 (meshlet-local vertex indices).
+// ---------------------------------------------------------------------------
+inline constexpr u32 kMeshletMaxVertices = 64;
+inline constexpr u32 kMeshletMaxTriangles = 124;
+inline constexpr u32 kTaskGroupSize = 32; // meshlets tested per task workgroup
+
+struct GpuMeshlet {
+    Vec3 center{ 0.0f };     // 0  bounding sphere (mesh space)
+    f32  radius = 0.0f;      // 12
+    Vec3 cone_apex{ 0.0f };  // 16 normal cone (mesh space)
+    f32  cone_cutoff = 1.0f; // 28 cos(half angle); >= 1 disables cone culling
+    Vec3 cone_axis{ 0.0f };  // 32
+    u32  vertex_offset = 0;  // 44 first word of the vertex indices
+    u32  triangle_offset = 0;// 48 first word of the packed triangles
+    u32  vertex_count = 0;   // 52
+    u32  triangle_count = 0; // 56
+    u32  pad = 0;            // 60
+};
+static_assert(sizeof(GpuMeshlet) == 64);
+static_assert(offsetof(GpuMeshlet, vertex_offset) == 44);
+
+// The 20-byte command slot of a meshlet batch: VkDrawMeshTasksIndirectCommandEXT + the candidate.
+struct GpuMeshTaskCommand {
+    u32 group_x = 0;         // ceil(meshlet_count / kTaskGroupSize)
+    u32 group_y = 1;
+    u32 group_z = 1;
+    u32 candidate = 0;       // index into the frame's GpuCullInstance array
+    u32 pad = 0;
+};
+static_assert(sizeof(GpuMeshTaskCommand) == 20);
 
 // VkDrawIndexedIndirectCommand.
 struct GpuDrawCommand {
@@ -249,7 +294,7 @@ struct GpuCullView {
 static_assert(offsetof(GpuCullView, view_proj) == 96);
 static_assert(offsetof(GpuCullView, hzb_size) == 168);
 static_assert(offsetof(GpuCullView, batch_offset) == 192);
-static_assert(sizeof(GpuCullView) == 256);
+static_assert(sizeof(GpuCullView) == 192 + 4 * kMaxDrawBatches);
 
 // ---------------------------------------------------------------------------
 // Push-constant blocks (<= 128 bytes; the universal layout exposes them to all stages).
@@ -264,6 +309,26 @@ struct MeshPush {             // prepass, shadows, forward, overdraw
     u32 pad = 0;
 };
 static_assert(sizeof(MeshPush) == 40);
+
+// Task + mesh shaders of meshlet batches (ADR-0010). The first 40 bytes are MeshPush, so the
+// fragment shaders (which declare MeshPush) are shared with the vertex path unchanged.
+struct MeshletPush {
+    u64 frame = 0;            // 0
+    u64 light_grid = 0;       // 8
+    u64 light_indices = 0;    // 16
+    u32 view_index = 0;       // 24
+    u32 pass_flags = 0;       // 28
+    u32 ssao_tex = kGpuInvalidIndex; // 32
+    u32 pad = 0;              // 36
+    u64 commands = 0;         // 40 this draw's command array (GpuMeshTaskCommand), indexed by gl_DrawID
+    u64 candidates = 0;       // 48 GpuCullInstance array
+    u64 vertices = 0;         // 56 static vertex arena (aether::Vertex)
+    u32 cone_culling = 1;     // 64 0 for double-sided batches
+    u32 pad1 = 0;             // 68
+    u64 cull_view = 0;        // 72 GpuCullView (main-view frustum planes)
+};
+static_assert(sizeof(MeshletPush) == 80);
+static_assert(offsetof(MeshletPush, commands) == 40);
 
 struct CullPush {
     u64 candidates = 0;       // 0  CullInstanceBuffer

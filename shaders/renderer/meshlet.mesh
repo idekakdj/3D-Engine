@@ -1,0 +1,58 @@
+// shaders/renderer/meshlet.mesh — meshlet rasterisation (ADR-0010). One workgroup emits one
+// meshlet chosen by meshlet.task. The per-vertex math is mesh.vert's, expression for expression
+// (non-skinned path), so the prepass and the Equal-tested forward / pick passes see bit-identical
+// depth and the images match the vertex path.
+#version 460
+#extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_mesh_shader : require
+#include "common/bindless.glsl"
+#include "frame_data.glsl"
+#include "cull_data.glsl"
+#include "meshlet_push.glsl"
+
+layout(local_size_x = AE_MESHLET_MAX_VERTICES) in;
+layout(triangles, max_vertices = AE_MESHLET_MAX_VERTICES, max_primitives = AE_MESHLET_MAX_TRIANGLES) out;
+
+taskPayloadSharedEXT TaskPayload payload;
+
+layout(location = 0) out vec3 v_world_pos[];
+layout(location = 1) out vec3 v_normal[];
+layout(location = 2) out vec4 v_tangent[];
+layout(location = 3) out vec2 v_uv[];
+layout(location = 4) flat out uint v_instance[];
+
+out gl_MeshPerVertexEXT {
+    invariant vec4 gl_Position;
+} gl_MeshVerticesEXT[];
+
+void main() {
+    GpuCullInstance c = pc.candidates.items[payload.candidate];
+    GpuMeshlet      ml = c.meshlets.items[payload.meshlets[gl_WorkGroupID.x]];
+    FrameData       frame = pc.frame;
+    GpuInstance     inst = frame.instances.items[c.instance];
+
+    SetMeshOutputsEXT(ml.vertex_count, ml.triangle_count);
+
+    mat4 view_proj = pc.view_index == 0u ? frame.view_proj : frame.cascade_view_proj[pc.view_index - 1u];
+    mat3 normal_matrix = mat3(inst.normal_col0.xyz, inst.normal_col1.xyz, inst.normal_col2.xyz);
+    for (uint v = gl_LocalInvocationID.x; v < ml.vertex_count; v += AE_MESHLET_MAX_VERTICES) {
+        uint      vi = uint(c.vertex_offset) + c.meshlet_words.words[ml.vertex_offset + v];
+        GpuVertex vtx = pc.vertices.items[vi];
+
+        vec4 local_pos = vec4(vtx.position, 1.0);
+        vec3 local_n = vtx.normal;
+        vec3 local_t = vtx.tangent.xyz;
+        vec4 world = inst.model * local_pos;
+
+        v_world_pos[v] = world.xyz;
+        v_normal[v] = ae_safe_normalize(normal_matrix * local_n);
+        v_tangent[v] = vec4(ae_safe_normalize(mat3(inst.model) * local_t), vtx.tangent.w < 0.0 ? -1.0 : 1.0);
+        v_uv[v] = vtx.uv;
+        v_instance[v] = c.instance;
+        gl_MeshVerticesEXT[v].gl_Position = view_proj * world;
+    }
+    for (uint t = gl_LocalInvocationID.x; t < ml.triangle_count; t += AE_MESHLET_MAX_VERTICES) {
+        uint packed = c.meshlet_words.words[ml.triangle_offset + t];
+        gl_PrimitiveTriangleIndicesEXT[t] = uvec3(packed & 0xFFu, (packed >> 8) & 0xFFu, (packed >> 16) & 0xFFu);
+    }
+}

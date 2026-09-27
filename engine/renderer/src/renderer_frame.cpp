@@ -174,6 +174,12 @@ void RendererImpl::resolve_instances(const RenderScene& scene, GpuInstance* gpu,
                 r.skinned = wants_skin && mesh->geo.skinned && in.first_joint != kInvalidU32 &&
                             in.joint_count > 0 &&
                             static_cast<u64>(in.first_joint) + in.joint_count <= joint_total;
+                if (mesh->meshlet_buffer.is_valid() && in.submesh < mesh->meshlet_ranges.size()) {
+                    const MeshletBuild::Range& mr = mesh->meshlet_ranges[in.submesh];
+                    r.meshlet_count = mr.count;
+                    r.meshlets = mesh->meshlets_gpu + static_cast<u64>(mr.first) * sizeof(GpuMeshlet);
+                    r.meshlet_words = mesh->meshlet_words_gpu;
+                }
             }
             if (const MaterialRecord* mat = materials_.get(in.material)) {
                 r.material = in.material.index() + 1;
@@ -312,10 +318,18 @@ void RendererImpl::build_draw_lists(const RenderScene& scene) {
             c.aabb_min = r.bounds.min;
             c.aabb_max = r.bounds.max;
             c.instance = i;
-            c.batch = draw_batch_index(r.skinned, masked, r.double_sided, r.skin_arena);
+            // ADR-0010: static meshes with meshlets go through the task + mesh shaders.
+            const bool meshlet = gpu_.meshlets && !r.skin_arena && !r.skinned && r.meshlet_count > 0;
+            c.batch = draw_batch_index(r.skinned, masked, r.double_sided, r.skin_arena, meshlet);
             c.first_index = r.first_index;
             c.index_count = r.index_count;
             c.vertex_offset = r.vertex_offset;
+            if (meshlet) {
+                c.meshlets = r.meshlets;
+                c.meshlet_words = r.meshlet_words;
+                c.meshlet_count = r.meshlet_count;
+                ++stats_.meshlet_instances;
+            }
             c.flags = instance_flags::has(scene.instances[i].flags, instance_flags::kNeverCull) ? kCullFlagNeverCull
                                                                                                 : 0u;
             ++gpu_.batch_count[c.batch];
@@ -365,6 +379,18 @@ bool RendererImpl::gpu_culling_supported() const {
     // Overdraw visualises the CPU draw lists (it re-pipelines every opaque item).
     return settings_.gpu_culling && f.draw_indirect_count && f.draw_indirect_first_instance &&
            pipelines_->valid(PipelineId::GpuCull) && settings_.debug_view != DebugView::Overdraw;
+}
+
+bool RendererImpl::mesh_shading_supported() const {
+    if (!settings_.mesh_shading || !device_.features().mesh_shaders) {
+        return false;
+    }
+    for (u32 i = kPipelineCount; i < kPipelineTableSize; ++i) {
+        if (!pipelines_->get(i).is_valid()) {
+            return false;
+        }
+    }
+    return true;
 }
 
 void RendererImpl::write_cull_data(GpuCullInstance* candidates, GpuCullView* view) {
@@ -464,10 +490,48 @@ void RendererImpl::draw_gpu_batches(rhi::CommandList& cmd, MeshPass pass, rhi::B
         if (gpu_.batch_count[b] == 0) {
             continue;
         }
+        const bool meshlet = (b & kBatchMeshlet) != 0;
         const bool skinned = (b & 8u) != 0;
         const bool masked = (b & 4u) != 0;
         const bool double_sided = (b & 2u) != 0;
         const bool skin_arena = (b & 1u) != 0;
+        if (meshlet) {
+            // ADR-0010: task + mesh shaders; the command array holds GpuMeshTaskCommands.
+            const u32                 mp = meshlet_pipeline_index(pass, depth_like && masked, double_sided);
+            const rhi::PipelineHandle p = pipelines_->get(mp);
+            if (!p.is_valid()) {
+                continue;
+            }
+            cmd.bind_pipeline(p);
+            bound_pipeline = mp;
+            MeshletPush mpush;
+            mpush.frame = push.frame;
+            mpush.light_grid = push.light_grid;
+            mpush.light_indices = push.light_indices;
+            mpush.view_index = push.view_index;
+            mpush.pass_flags = push.pass_flags;
+            mpush.ssao_tex = push.ssao_tex;
+            mpush.candidates = gpu_.candidates_gpu;
+            mpush.vertices = device_.buffer_device_address(geometry_.static_vertex_buffer());
+            mpush.cone_culling = double_sided ? 0u : 1u;
+            mpush.cull_view = gpu_.view_gpu;
+            const u64 draws_gpu = device_.buffer_device_address(draws);
+            for (u32 phase = 0; phase < 2; ++phase) {
+                if ((phase == 0 && !phase1) || (phase == 1 && !phase2)) {
+                    continue;
+                }
+                const u64 cmd_offset = (static_cast<u64>(phase) * gpu_.cmd_capacity + gpu_.batch_offset[b]) *
+                                       sizeof(GpuMeshTaskCommand);
+                const u64 count_offset =
+                    static_cast<u64>((phase == 0 ? kCounterPhase1 : kCounterPhase2) + b) * sizeof(u32);
+                mpush.commands = draws_gpu + cmd_offset;
+                cmd.push_constants(rhi::ShaderStage::AllGraphics, 0, sizeof(mpush), &mpush);
+                cmd.draw_mesh_tasks_indirect_count(draws, cmd_offset, counters, count_offset, gpu_.batch_count[b],
+                                                   sizeof(GpuMeshTaskCommand));
+                ++stats_.draw_calls;
+            }
+            continue;
+        }
         const u32  pipeline = mesh_pipeline_index(pass, skinned, depth_like && masked, double_sided);
         const rhi::PipelineHandle p = pipelines_->get(pipeline);
         if (!p.is_valid()) {
@@ -684,12 +748,16 @@ void RendererImpl::render(const RenderScene& scene, rhi::CommandList& cmd, const
     // ---- GPU-driven path + picking decisions (ADR-0009) ----
     gpu_.active = gpu_culling_supported();
     gpu_.occlusion = gpu_.active && settings_.occlusion_culling && pipelines_->valid(PipelineId::HiZBuild);
+    gpu_.meshlets = gpu_.active && mesh_shading_supported();
     gpu_.candidates = 0;
-    if (const i32 mode = gpu_.active ? (gpu_.occlusion ? 2 : 1) : 0; mode != logged_cull_mode_) {
+    if (const i32 mode = (gpu_.active ? (gpu_.occlusion ? 2 : 1) : 0) + (gpu_.meshlets ? 3 : 0);
+        mode != logged_cull_mode_) {
         logged_cull_mode_ = mode;
         constexpr const char* kModes[] = { "CPU frustum culling", "GPU frustum culling + indirect draws",
                                            "GPU frustum + two-phase Hi-Z occlusion culling + indirect draws" };
-        AE_LOG_INFO("Renderer", "opaque path: {}", kModes[mode]);
+        AE_LOG_INFO("Renderer", "opaque path: {}{}", kModes[mode % 3],
+                    gpu_.meshlets ? "; static meshes as meshlets (task + mesh shaders, meshlet frustum + cone culling)"
+                                  : "");
     }
     pick_this_frame_ = false;
     if (pending_pick_) {

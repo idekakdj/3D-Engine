@@ -11,6 +11,7 @@ aether_add_module(rhi
         src/vk_resources.cpp
         src/vk_bindless.cpp
         src/vk_pipeline_cache.cpp
+        src/command_list.cpp
         src/vk_command_list.cpp
         src/vk_readback.cpp
         src/vma_impl.cpp

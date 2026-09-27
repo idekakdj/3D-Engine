@@ -58,6 +58,15 @@ public:
                              u64 dst_off = 0) = 0;
     virtual void copy_buffer_to_texture(BufferHandle src, TextureHandle dst, u32 mip = 0) = 0;
 
+    // ADR-0010 (additive): VK_EXT_mesh_shader draws for pipelines with a mesh stage. Only valid
+    // when DeviceFeatures::mesh_shaders (and, for the count variant, draw_indirect_count); the
+    // defaults log and do nothing so test doubles keep compiling. `args` holds
+    // VkDrawMeshTasksIndirectCommandEXT {x, y, z} records `stride` bytes apart (extra bytes after
+    // the 12-byte command are free for the application, e.g. read back via gl_DrawID).
+    virtual void draw_mesh_tasks(u32 gx, u32 gy, u32 gz);
+    virtual void draw_mesh_tasks_indirect_count(BufferHandle args, u64 offset, BufferHandle count_buffer,
+                                                u64 count_offset, u32 max_draws, u32 stride);
+
     // Debug markers for RenderDoc / validation.
     virtual void push_debug_group(const char* name) = 0;
     virtual void pop_debug_group() = 0;

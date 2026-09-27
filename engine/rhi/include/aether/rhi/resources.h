@@ -107,6 +107,11 @@ struct GraphicsPipelineDesc {
     RenderTargetFormats       targets{};
     u32                       push_constant_size = 0;
     std::string               debug_name;
+    // ADR-0010 (additive): mesh-shading pipeline (DeviceFeatures::mesh_shaders). With a valid
+    // `mesh` shader the pipeline has no vertex stage and ignores vertex_bindings/attributes and
+    // topology; `task` is optional. `vertex` must then be left invalid.
+    ShaderHandle              task;
+    ShaderHandle              mesh;
 };
 
 struct ComputePipelineDesc {

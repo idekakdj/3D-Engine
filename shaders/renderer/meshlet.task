@@ -1,0 +1,75 @@
+// shaders/renderer/meshlet.task — meshlet culling (ADR-0010). One workgroup tests up to
+// AE_TASK_GROUP_SIZE meshlets of one visible instance (the instance already passed the GPU
+// frustum / Hi-Z tests in gpu_cull.comp) and launches one mesh workgroup per survivor:
+//   * frustum: the meshlet's world-space bounding sphere against the main-view planes
+//   * backface: meshoptimizer's normal cone (apex form, exact under perspective); skipped for
+//     double-sided batches and for mirrored or non-uniformly scaled instances
+// Survivors are compacted in thread order (deterministic, no subgroup operations), so a frame
+// always rasterises the same triangles in the same order.
+#version 460
+#extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_mesh_shader : require
+#include "common/bindless.glsl"
+#include "frame_data.glsl"
+#include "cull_data.glsl"
+#include "meshlet_push.glsl"
+
+layout(local_size_x = AE_TASK_GROUP_SIZE) in;
+
+taskPayloadSharedEXT TaskPayload payload;
+shared uint s_visible[AE_TASK_GROUP_SIZE];
+
+bool sphere_visible(vec3 c, float r) {
+    CullViewBuffer v = pc.cull_view;
+    for (uint i = 0u; i < v.plane_count; ++i) {
+        vec4 p = v.planes[i];
+        if (dot(p.xyz, c) + p.w < -r) {
+            return false;
+        }
+    }
+    return true;
+}
+
+void main() {
+    GpuMeshTaskCommand cmd = pc.commands.cmds[gl_DrawID];
+    GpuCullInstance    c = pc.candidates.items[cmd.candidate];
+    FrameData          frame = pc.frame;
+    GpuInstance        inst = frame.instances.items[c.instance];
+
+    uint lid = gl_LocalInvocationID.x;
+    uint m = gl_WorkGroupID.x * AE_TASK_GROUP_SIZE + lid;
+    bool visible = m < c.meshlet_count;
+    if (visible && (c.flags & AE_CULL_NEVER_CULL) == 0u) {
+        GpuMeshlet ml = c.meshlets.items[m];
+        mat3  m3 = mat3(inst.model);
+        vec3  sx = vec3(dot(m3[0], m3[0]), dot(m3[1], m3[1]), dot(m3[2], m3[2]));
+        float max_scale = sqrt(max(sx.x, max(sx.y, sx.z)));
+        vec3  center = (inst.model * vec4(ml.center, 1.0)).xyz;
+        visible = sphere_visible(center, ml.radius * max_scale * 1.0001 + 1e-4);
+
+        bool uniform_scale = max(sx.x, max(sx.y, sx.z)) - min(sx.x, min(sx.y, sx.z)) <= 1e-3 * max(sx.x, 1e-12);
+        if (visible && pc.cone_culling != 0u && ml.cone_cutoff < 1.0 && uniform_scale && determinant(m3) > 0.0) {
+            vec3 apex = (inst.model * vec4(ml.cone_apex, 1.0)).xyz;
+            vec3 axis = normalize(m3 * ml.cone_axis);
+            // Small margin keeps triangles that are exactly edge-on (rasterised as nothing anyway).
+            visible = dot(normalize(apex - frame.camera_pos), axis) < ml.cone_cutoff - 1e-3;
+        }
+    }
+    s_visible[lid] = visible ? 1u : 0u;
+    barrier();
+
+    uint index = 0u;
+    uint total = 0u;
+    for (uint k = 0u; k < AE_TASK_GROUP_SIZE; ++k) {
+        uint f = s_visible[k];
+        index += k < lid ? f : 0u;
+        total += f;
+    }
+    if (visible) {
+        payload.meshlets[index] = m;
+    }
+    if (lid == 0u) {
+        payload.candidate = cmd.candidate;
+    }
+    EmitMeshTasksEXT(total, 1u, 1u);
+}

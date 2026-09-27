@@ -15,6 +15,7 @@
 #include "gpu_data.h"
 #include "handle_pool.h"
 #include "ibl.h"
+#include "meshlets.h"
 #include "pipelines.h"
 #include "render_graph.h"
 #include "render_math.h"
@@ -67,6 +68,12 @@ private:
         std::vector<Submesh> submeshes;
         AABB                 bounds{};
         std::string          name;
+        // ADR-0010: meshlets of a static mesh on mesh-shading devices (one buffer:
+        // GpuMeshlet array, then the u32 word stream); ranges parallel to `submeshes`.
+        rhi::BufferHandle          meshlet_buffer;
+        u64                        meshlets_gpu = 0;
+        u64                        meshlet_words_gpu = 0;
+        std::vector<MeshletBuild::Range> meshlet_ranges;
     };
     struct TextureRecord {
         rhi::TextureHandle    texture;
@@ -117,6 +124,9 @@ private:
         bool skin_arena = false; // vertices live in the skinned arena
         bool visible = false;   // main view
         bool caster = false;
+        u32  meshlet_count = 0; // ADR-0010: static meshes with meshlets
+        u64  meshlets = 0;
+        u64  meshlet_words = 0;
         u8   cascade_mask = 0;
         AABB bounds{};
     };
@@ -142,6 +152,7 @@ private:
     struct GpuDrivenFrame {
         bool active = false;    // opaque + masked instances are culled on the GPU
         bool occlusion = false; // two-phase Hi-Z occlusion culling
+        bool meshlets = false;  // ADR-0010: static candidates drawn with task + mesh shaders
         u32  candidates = 0;
         u32  cmd_capacity = 0;  // commands per phase region (power of two >= candidates)
         std::array<u32, kMaxDrawBatches> batch_count{};
@@ -183,6 +194,8 @@ private:
     void build_graph(const RenderScene& scene, const RenderTarget& target);
     // ADR-0009: GPU-driven culling, Hi-Z, picking readback.
     [[nodiscard]] bool gpu_culling_supported() const;
+    [[nodiscard]] bool mesh_shading_supported() const;
+    void build_mesh_meshlets(MeshRecord& rec, const MeshUpload& up);
     void write_cull_data(GpuCullInstance* candidates, GpuCullView* view);
     void collect_readbacks(u32 slot);
     void ensure_visibility_buffer(u32 instances);

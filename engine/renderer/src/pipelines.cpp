@@ -114,6 +114,20 @@ PipelineSpec mesh_spec(MeshPass pass, bool skinned, bool masked, bool double_sid
     return s;
 }
 
+// ADR-0010: the task + mesh shader variant of a GPU-driven mesh pass (static meshes only). Same
+// fragment shader, raster and depth state as the vertex pipeline it replaces.
+PipelineSpec meshlet_spec(MeshPass pass, bool masked, bool double_sided, const rhi::DeviceFeatures& features) {
+    PipelineSpec s = mesh_spec(pass, false, masked, double_sided, features);
+    s.mesh_shading = true;
+    s.ts = { "renderer/meshlet.task", rhi::ShaderStage::Task, {} };
+    s.vs = { "renderer/meshlet.mesh", rhi::ShaderStage::Mesh, {} };
+    s.graphics.vertex_bindings.clear();
+    s.graphics.vertex_attributes.clear();
+    s.name = "Meshlet" + s.name.substr(4); // "Mesh.Depth..." -> "Meshlet.Depth..."
+    s.graphics.debug_name = s.name;
+    return s;
+}
+
 PipelineSpec compute_spec(std::string name, std::string file) {
     PipelineSpec s;
     s.name = std::move(name);
@@ -152,6 +166,17 @@ u32 mesh_pipeline_index(MeshPass pass, bool skinned, bool masked, bool double_si
     return 0;
 }
 
+u32 meshlet_pipeline_index(MeshPass pass, bool masked, bool double_sided) {
+    const u32 ds = double_sided ? 1u : 0u;
+    switch (pass) {
+    case MeshPass::Depth: return kPipelineCount + (masked ? 2u : 0u) + ds;
+    case MeshPass::Forward: return kPipelineCount + 4u + ds;
+    case MeshPass::Pick: return kPipelineCount + 6u + ds;
+    default: break;
+    }
+    return kPipelineTableSize; // no meshlet variant (out of range => invalid pipeline)
+}
+
 std::vector<rhi::ShaderDefine> shared_shader_defines() {
     return {
         def("AE_CLUSTER_X", std::to_string(kClusterX)),
@@ -160,11 +185,14 @@ std::vector<rhi::ShaderDefine> shared_shader_defines() {
         def("AE_MAX_LIGHTS_PER_CLUSTER", std::to_string(kMaxLightsPerCluster)),
         def("AE_MAX_CASCADES", std::to_string(kMaxCascades)),
         def("AE_MAX_DRAW_BATCHES", std::to_string(kMaxDrawBatches)),
+        def("AE_TASK_GROUP_SIZE", std::to_string(kTaskGroupSize)),
+        def("AE_MESHLET_MAX_VERTICES", std::to_string(kMeshletMaxVertices)),
+        def("AE_MESHLET_MAX_TRIANGLES", std::to_string(kMeshletMaxTriangles)),
     };
 }
 
 std::vector<PipelineSpec> build_pipeline_specs(const rhi::DeviceFeatures& features) {
-    std::vector<PipelineSpec> specs(kPipelineCount);
+    std::vector<PipelineSpec> specs(kPipelineTableSize);
 
     for (const bool sk : { false, true }) {
         for (const bool m : { false, true }) {
@@ -245,6 +273,15 @@ std::vector<PipelineSpec> build_pipeline_specs(const rhi::DeviceFeatures& featur
         s.per_target_format = true;
         specs[pipeline_index(PipelineId::DebugLines)] = std::move(s);
     }
+    if (features.mesh_shaders) {
+        for (const bool ds : { false, true }) {
+            for (const bool m : { false, true }) {
+                specs[meshlet_pipeline_index(MeshPass::Depth, m, ds)] = meshlet_spec(MeshPass::Depth, m, ds, features);
+            }
+            specs[meshlet_pipeline_index(MeshPass::Forward, false, ds)] = meshlet_spec(MeshPass::Forward, false, ds, features);
+            specs[meshlet_pipeline_index(MeshPass::Pick, false, ds)] = meshlet_spec(MeshPass::Pick, false, ds, features);
+        }
+    }
     return specs;
 }
 
@@ -315,8 +352,8 @@ rhi::ShaderHandle PipelineLibrary::compile(const ShaderSource& src, std::vector<
     return entry.ok ? entry.handle : rhi::ShaderHandle{};
 }
 
-rhi::PipelineHandle PipelineLibrary::create(const Entry& e, rhi::ShaderHandle vs, rhi::ShaderHandle fs,
-                                            rhi::ShaderHandle cs, rhi::Format color_override) {
+rhi::PipelineHandle PipelineLibrary::create(const Entry& e, rhi::ShaderHandle ts, rhi::ShaderHandle vs,
+                                            rhi::ShaderHandle fs, rhi::ShaderHandle cs, rhi::Format color_override) {
     if (e.spec.compute) {
         if (!cs.is_valid()) {
             return {};
@@ -331,7 +368,15 @@ rhi::PipelineHandle PipelineLibrary::create(const Entry& e, rhi::ShaderHandle vs
         return {};
     }
     rhi::GraphicsPipelineDesc d = e.spec.graphics;
-    d.vertex = vs;
+    if (e.spec.mesh_shading) {
+        if (!e.spec.ts.empty() && !ts.is_valid()) {
+            return {};
+        }
+        d.task = ts;
+        d.mesh = vs;
+    } else {
+        d.vertex = vs;
+    }
     d.fragment = fs;
     d.push_constant_size = e.spec.push_constant_size;
     if (color_override != rhi::Format::Undefined) {
@@ -354,10 +399,11 @@ u32 PipelineLibrary::build(std::vector<PipelineSpec> specs) {
             entries_.push_back(std::move(e)); // unused slot
             continue;
         }
+        e.ts = compile(e.spec.ts, cache, errors);
         e.vs = compile(e.spec.vs, cache, errors);
         e.fs = compile(e.spec.fs, cache, errors);
         e.cs = compile(e.spec.cs, cache, errors);
-        e.pipeline = create(e, e.vs, e.fs, e.cs, rhi::Format::Undefined);
+        e.pipeline = create(e, e.ts, e.vs, e.fs, e.cs, rhi::Format::Undefined);
         if (!e.pipeline.is_valid()) {
             ++failures;
             AE_LOG_ERROR(kLogCat, "pipeline '{}' unavailable - its pass is disabled", e.spec.name);
@@ -376,10 +422,11 @@ Result<void> PipelineLibrary::reload() {
         if (e.spec.name.empty()) {
             continue;
         }
+        const rhi::ShaderHandle ts = compile(e.spec.ts, cache, errors);
         const rhi::ShaderHandle vs = compile(e.spec.vs, cache, errors);
         const rhi::ShaderHandle fs = compile(e.spec.fs, cache, errors);
         const rhi::ShaderHandle cs = compile(e.spec.cs, cache, errors);
-        const rhi::PipelineHandle np = create(e, vs, fs, cs, rhi::Format::Undefined);
+        const rhi::PipelineHandle np = create(e, ts, vs, fs, cs, rhi::Format::Undefined);
         if (!np.is_valid()) {
             AE_LOG_WARN(kLogCat, "reload: keeping previous '{}'", e.spec.name);
             continue;
@@ -387,7 +434,7 @@ Result<void> PipelineLibrary::reload() {
         std::vector<std::pair<rhi::Format, rhi::PipelineHandle>> variants;
         bool                                                     ok = true;
         for (const auto& [fmt, old] : e.variants) {
-            const rhi::PipelineHandle v = create(e, vs, fs, cs, fmt);
+            const rhi::PipelineHandle v = create(e, ts, vs, fs, cs, fmt);
             if (!v.is_valid()) {
                 ok = false;
                 break;
@@ -412,6 +459,7 @@ Result<void> PipelineLibrary::reload() {
         }
         e.pipeline = np;
         e.variants = std::move(variants);
+        e.ts = ts;
         e.vs = vs;
         e.fs = fs;
         e.cs = cs;
@@ -446,7 +494,7 @@ rhi::PipelineHandle PipelineLibrary::get_for_format(PipelineId id, rhi::Format c
             return p;
         }
     }
-    const rhi::PipelineHandle p = create(e, e.vs, e.fs, e.cs, color_format);
+    const rhi::PipelineHandle p = create(e, e.ts, e.vs, e.fs, e.cs, color_format);
     if (p.is_valid()) {
         e.variants.emplace_back(color_format, p);
     }
@@ -456,7 +504,7 @@ rhi::PipelineHandle PipelineLibrary::get_for_format(PipelineId id, rhi::Format c
 void PipelineLibrary::destroy_unreferenced_shaders() {
     std::vector<rhi::ShaderHandle> keep;
     for (const Entry& e : entries_) {
-        for (rhi::ShaderHandle h : { e.vs, e.fs, e.cs }) {
+        for (rhi::ShaderHandle h : { e.ts, e.vs, e.fs, e.cs }) {
             if (h.is_valid() && std::find(keep.begin(), keep.end(), h) == keep.end()) {
                 keep.push_back(h);
             }
@@ -481,7 +529,7 @@ void PipelineLibrary::shutdown() {
         }
         e.pipeline = {};
         e.variants.clear();
-        e.vs = e.fs = e.cs = {};
+        e.ts = e.vs = e.fs = e.cs = {};
     }
     for (rhi::ShaderHandle h : modules_) {
         device_.destroy(h);

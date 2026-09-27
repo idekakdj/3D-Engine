@@ -191,6 +191,31 @@ void VulkanCommandList::draw_indexed_indirect_count(BufferHandle args, u64 offse
     ++stats_.draw_calls;
 }
 
+void VulkanCommandList::draw_mesh_tasks(u32 gx, u32 gy, u32 gz) {
+    if (!device_.features().mesh_shaders) {
+        AE_LOG_ERROR("RHI", "draw_mesh_tasks: mesh shaders not supported (check DeviceFeatures)");
+        return;
+    }
+    vkCmdDrawMeshTasksEXT(cmd_, gx, gy, gz);
+    ++stats_.draw_calls;
+}
+
+void VulkanCommandList::draw_mesh_tasks_indirect_count(BufferHandle args, u64 offset, BufferHandle count_buffer,
+                                                       u64 count_offset, u32 max_draws, u32 stride) {
+    if (!device_.features().mesh_shaders || !device_.features().draw_indirect_count) {
+        AE_LOG_ERROR("RHI", "draw_mesh_tasks_indirect_count: mesh shaders / drawIndirectCount not supported");
+        return;
+    }
+    const BufferRecord* a = device_.buffer(args);
+    const BufferRecord* c = device_.buffer(count_buffer);
+    if (!a || !c) {
+        AE_LOG_ERROR("RHI", "draw_mesh_tasks_indirect_count: invalid buffer handle");
+        return;
+    }
+    vkCmdDrawMeshTasksIndirectCountEXT(cmd_, a->buffer, offset, c->buffer, count_offset, max_draws, stride);
+    ++stats_.draw_calls;
+}
+
 void VulkanCommandList::dispatch(u32 gx, u32 gy, u32 gz) {
     vkCmdDispatch(cmd_, gx, gy, gz);
     ++stats_.dispatches;

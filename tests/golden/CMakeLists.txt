@@ -40,4 +40,10 @@ if(AE_BUILD_TESTS AND AE_GOLDEN_TESTS)
         add_test(NAME golden.${c} COMMAND aether-golden --case ${c})
         set_tests_properties(golden.${c} PROPERTIES SKIP_RETURN_CODE 77 LABELS "gpu;golden" TIMEOUT 300)
     endforeach()
+    # ADR-0010: the vertex (indexed indirect) path must match the same references as the meshlet
+    # path on mesh-shading devices; on other devices both runs take the vertex path.
+    foreach(c IN ITEMS pbr_spheres punctual_lights debug_normals)
+        add_test(NAME golden.${c}.no_mesh_shading COMMAND aether-golden --case ${c} --no-mesh-shading)
+        set_tests_properties(golden.${c}.no_mesh_shading PROPERTIES SKIP_RETURN_CODE 77 LABELS "gpu;golden" TIMEOUT 300)
+    endforeach()
 endif()

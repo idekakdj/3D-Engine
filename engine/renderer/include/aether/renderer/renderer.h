@@ -116,6 +116,10 @@ struct RendererSettings {
     bool      gpu_culling = true;
     bool      occlusion_culling = true;
     DebugView debug_view = DebugView::None;
+    // ADR-0010 (additive): draw static meshes of the GPU-driven path as meshlets through task +
+    // mesh shaders (per-meshlet frustum + backface-cone culling). Needs gpu_culling and
+    // DeviceFeatures::mesh_shaders; otherwise the indexed indirect path is used.
+    bool      mesh_shading = true;
 };
 
 struct RendererStats {
@@ -128,6 +132,8 @@ struct RendererStats {
     // ADR-0009 (additive): GPU-driven statistics (read back with a frames-in-flight delay).
     u32 instances_gpu_frustum_culled = 0;
     u32 instances_gpu_occlusion_culled = 0;
+    // ADR-0010: GPU-driven candidates drawn as meshlets this frame (0 when mesh shading is off).
+    u32 meshlet_instances = 0;
 };
 
 struct RendererDesc {

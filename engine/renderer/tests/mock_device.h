@@ -31,6 +31,7 @@ struct MockState {
     std::vector<std::string>                    log; // "barrier <tex> A->B", "group <name>", ...
     std::vector<MockMipUpload>                  mip_uploads;
     u32 indirect_count_draws = 0, invalidations = 0;
+    u32 mesh_task_draws = 0, mesh_pipelines_created = 0; // ADR-0010
     u32 textures_created = 0, textures_destroyed = 0;
     u32 buffers_created = 0, buffers_destroyed = 0;
     u32 pipelines_created = 0, draws = 0, dispatches = 0;
@@ -83,6 +84,15 @@ public:
         check_buffer(a);
         check_buffer(c);
         ++s_.indirect_count_draws;
+        on_draw();
+    }
+    void draw_mesh_tasks_indirect_count(rhi::BufferHandle a, u64, rhi::BufferHandle c, u64, u32, u32 stride) override {
+        check_buffer(a);
+        check_buffer(c);
+        if (stride != 20) {
+            err("mesh task command stride must be 20 (GpuMeshTaskCommand)");
+        }
+        ++s_.mesh_task_draws;
         on_draw();
     }
     void dispatch(u32, u32, u32) override {
@@ -204,6 +214,14 @@ public:
         return d.spirv.empty() ? rhi::ShaderHandle{} : rhi::ShaderHandle(next_++, 1);
     }
     rhi::PipelineHandle create_graphics_pipeline(const rhi::GraphicsPipelineDesc& d) override {
+        if (d.mesh.is_valid()) { // ADR-0010 mesh-shading pipeline: no vertex stage
+            if (!features_.mesh_shaders || d.vertex.is_valid() || !d.fragment.is_valid()) {
+                return {};
+            }
+            ++state.pipelines_created;
+            ++state.mesh_pipelines_created;
+            return rhi::PipelineHandle(next_++, 1);
+        }
         if (!d.vertex.is_valid() || !d.fragment.is_valid()) {
             return {};
         }

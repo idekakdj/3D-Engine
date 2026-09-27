@@ -33,7 +33,7 @@ TEST_CASE("every shader in shaders/renderer compiles") {
     u32 compiled = 0;
     for (const auto& entry : std::filesystem::directory_iterator(dir)) {
         const std::string ext = entry.path().extension().string();
-        if (ext != ".vert" && ext != ".frag" && ext != ".comp") {
+        if (ext != ".vert" && ext != ".frag" && ext != ".comp" && ext != ".task" && ext != ".mesh") {
             continue;
         }
         auto stage = rhi::shader_stage_from_path(entry.path());
@@ -53,12 +53,13 @@ TEST_CASE("every shader in shaders/renderer compiles") {
 TEST_CASE("every renderer pipeline permutation compiles") {
     rhi::DeviceFeatures features;
     features.depth_clamp = true;
+    features.mesh_shaders = true; // ADR-0010: include the meshlet task/mesh permutations
     const std::vector<PipelineSpec> specs = build_pipeline_specs(features);
-    REQUIRE(specs.size() == kPipelineCount);
+    REQUIRE(specs.size() == kPipelineTableSize);
     std::set<std::string> seen;
     for (const PipelineSpec& spec : specs) {
         CHECK_FALSE(spec.name.empty());
-        for (const ShaderSource* src : { &spec.vs, &spec.fs, &spec.cs }) {
+        for (const ShaderSource* src : { &spec.ts, &spec.vs, &spec.fs, &spec.cs }) {
             if (src->empty() || !seen.insert(src->key()).second) {
                 continue;
             }
@@ -86,4 +87,33 @@ TEST_CASE("every renderer pipeline permutation compiles") {
     }
     CHECK(idx.size() == kMeshPipelineCount);
     CHECK(*idx.rbegin() == kMeshPipelineCount - 1);
+
+    // Meshlet table: dense after the fixed pipelines; only GPU-driven passes have a variant.
+    std::set<u32> mi;
+    for (bool m : { false, true }) {
+        for (bool ds : { false, true }) {
+            mi.insert(meshlet_pipeline_index(MeshPass::Depth, m, ds));
+            mi.insert(meshlet_pipeline_index(MeshPass::Forward, false, ds));
+            mi.insert(meshlet_pipeline_index(MeshPass::Pick, false, ds));
+        }
+    }
+    CHECK(mi.size() == kMeshletPipelineCount);
+    CHECK(*mi.begin() == kPipelineCount);
+    CHECK(*mi.rbegin() == kPipelineTableSize - 1);
+    CHECK(meshlet_pipeline_index(MeshPass::Shadow, false, false) == kPipelineTableSize);
+    for (u32 i = kPipelineCount; i < kPipelineTableSize; ++i) {
+        CHECK(specs[i].mesh_shading);
+        CHECK(specs[i].ts.stage == rhi::ShaderStage::Task);
+        CHECK(specs[i].vs.stage == rhi::ShaderStage::Mesh);
+        CHECK(specs[i].graphics.vertex_bindings.empty());
+    }
+}
+
+TEST_CASE("meshlet pipelines are absent without mesh-shader support") {
+    rhi::DeviceFeatures features;
+    const std::vector<PipelineSpec> specs = build_pipeline_specs(features);
+    REQUIRE(specs.size() == kPipelineTableSize);
+    for (u32 i = kPipelineCount; i < kPipelineTableSize; ++i) {
+        CHECK(specs[i].name.empty());
+    }
 }

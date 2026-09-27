@@ -79,7 +79,12 @@ RendererImpl::~RendererImpl() {
     device_.wait_idle();
     process_releases(true);
 
-    meshes_.drain([&](MeshRecord&& m) { geometry_.release(m.geo); });
+    meshes_.drain([&](MeshRecord&& m) {
+        geometry_.release(m.geo);
+        if (m.meshlet_buffer.is_valid()) {
+            device_.destroy(m.meshlet_buffer);
+        }
+    });
     textures_.drain([&](TextureRecord&& t) {
         if (t.descriptor.is_valid()) {
             device_.unregister_texture(t.descriptor);
@@ -238,11 +243,45 @@ MeshHandle RendererImpl::register_mesh(const MeshUpload& up) {
         return {};
     }
     rec.geo = *geo;
+    build_mesh_meshlets(rec, up);
+    const rhi::BufferHandle meshlet_buffer = rec.meshlet_buffer;
     const MeshHandle h = meshes_.insert(std::move(rec));
     if (!h.is_valid()) {
         geometry_.release(*geo);
+        if (meshlet_buffer.is_valid()) {
+            device_.destroy(meshlet_buffer);
+        }
     }
     return h;
+}
+
+// ADR-0010: static meshes on mesh-shading devices also get meshlets (skinned meshes keep the
+// vertex path: their positions only exist after skinning in mesh.vert).
+void RendererImpl::build_mesh_meshlets(MeshRecord& rec, const MeshUpload& up) {
+    if (!device_.features().mesh_shaders || !up.skin.empty()) {
+        return;
+    }
+    MeshletBuild b = build_meshlets(up.vertices, up.indices, rec.submeshes);
+    if (b.meshlets.empty()) {
+        return;
+    }
+    rhi::BufferDesc d;
+    d.size = b.gpu_bytes();
+    d.usage = rhi::BufferUsage::Storage | rhi::BufferUsage::TransferDst;
+    d.debug_name = up.debug_name.empty() ? std::string("Meshlets") : "Meshlets." + up.debug_name;
+    rec.meshlet_buffer = device_.create_buffer(d);
+    if (!rec.meshlet_buffer.is_valid()) {
+        AE_LOG_WARN(kLogCat, "register_mesh('{}'): meshlet buffer allocation failed; vertex path only", up.debug_name);
+        return;
+    }
+    const u64 meshlet_bytes = b.meshlets.size() * sizeof(GpuMeshlet);
+    device_.update_buffer(rec.meshlet_buffer, ByteSpan(reinterpret_cast<const byte*>(b.meshlets.data()), meshlet_bytes), 0);
+    device_.update_buffer(rec.meshlet_buffer,
+                          ByteSpan(reinterpret_cast<const byte*>(b.words.data()), b.words.size() * sizeof(u32)),
+                          meshlet_bytes);
+    rec.meshlets_gpu = device_.buffer_device_address(rec.meshlet_buffer);
+    rec.meshlet_words_gpu = rec.meshlets_gpu + meshlet_bytes;
+    rec.meshlet_ranges = std::move(b.submeshes);
 }
 
 void RendererImpl::release(MeshHandle h) {
@@ -252,6 +291,9 @@ void RendererImpl::release(MeshHandle h) {
     }
     const GeometryAllocation geo = rec->geo;
     defer_release([this, geo] { geometry_.release(geo); });
+    if (rec->meshlet_buffer.is_valid()) {
+        device_.destroy(rec->meshlet_buffer); // the device defers it past the frames in flight
+    }
 }
 
 // ===========================================================================

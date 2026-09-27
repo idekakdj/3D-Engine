@@ -1,11 +1,13 @@
 # aether.renderer - render graph + clustered forward+ PBR renderer (blueprint §7, ADR-0002).
-# Depends only on core + rhi. Shaders live in shaders/renderer/ and are compiled at runtime.
+# Depends only on core + rhi (+ meshoptimizer, private, for the ADR-0010 meshlet path). Shaders
+# live in shaders/renderer/ and are compiled at runtime.
 
 aether_add_module(renderer
     SOURCES
         src/frame_arena.cpp
         src/geometry_arena.cpp
         src/ibl.cpp
+        src/meshlets.cpp
         src/pipelines.cpp
         src/range_allocator.cpp
         src/render_graph.cpp
@@ -16,6 +18,8 @@ aether_add_module(renderer
     PUBLIC_DEPS
         aether::core
         aether::rhi
+    PRIVATE_DEPS
+        aether_meshoptimizer
     PRIVATE_DEFINES
         # Dev fallback when paths::shader_dir() (exe-relative) has no renderer/ folder.
         AE_RENDERER_SHADER_SOURCE_DIR="${CMAKE_SOURCE_DIR}/shaders")
@@ -27,11 +31,13 @@ aether_add_test(renderer
     tests/shader_tests.cpp
     tests/renderer_mock_tests.cpp
     tests/texture_tests.cpp
-    tests/gpu_driven_tests.cpp)
+    tests/gpu_driven_tests.cpp
+    tests/meshlet_tests.cpp)
 
 if(TARGET test.renderer)
     # Tests exercise private implementation headers (render graph, culling, ...).
     target_include_directories(test.renderer PRIVATE src tests)
+    target_link_libraries(test.renderer PRIVATE aether_meshoptimizer)
     target_compile_definitions(test.renderer PRIVATE
         AE_RENDERER_SHADER_SOURCE_DIR="${CMAKE_SOURCE_DIR}/shaders")
 endif()

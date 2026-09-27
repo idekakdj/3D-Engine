@@ -2,6 +2,7 @@
 // gpu_cull.comp, reverse-Z min pyramid), the GPU-driven pass structure on the validating mock
 // device, and the asynchronous readback plumbing of GPU statistics and picking.
 #include "gpu_data.h"
+#include "pipelines.h"
 #include "mock_device.h"
 #include "render_math.h"
 
@@ -118,9 +119,10 @@ struct Fixture {
     rhi::TextureHandle        target_tex;
     RenderTarget              target;
 
-    explicit Fixture(bool gpu_features) {
+    explicit Fixture(bool gpu_features, bool mesh_shaders = false) {
         device.mutable_features().draw_indirect_count = gpu_features;
         device.mutable_features().draw_indirect_first_instance = gpu_features;
+        device.mutable_features().mesh_shaders = mesh_shaders;
         auto created = Renderer::create(RendererDesc{ &device, UVec2(160, 90) });
         REQUIRE(created);
         r = std::move(created.value());
@@ -237,6 +239,48 @@ TEST_CASE("GPU-driven path: pass structure, indirect-count draws, fallbacks") {
     for (const std::string& e : f.device.state.errors) {
         MESSAGE(e);
     }
+}
+
+TEST_CASE("mesh shading: static candidates are drawn as meshlets, with fallbacks (ADR-0010)") {
+    Fixture f(true, true);
+    CHECK(f.device.state.mesh_pipelines_created == kMeshletPipelineCount);
+    const RenderScene s = f.scene(90); // opaque, masked + double-sided, translucent
+    f.frame(s);
+    CHECK(f.device.state.mesh_task_draws > 0);
+    CHECK(f.r->stats().meshlet_instances == 60); // the two non-translucent thirds
+    // Picking draws its id pass through the meshlet pipelines too.
+    const u32 before_pick = f.device.state.mesh_task_draws;
+    f.r->request_pick(UVec2(80, 45));
+    f.frame(s);
+    CHECK(f.device.state.mesh_task_draws > before_pick);
+
+    // Disabled by setting: the indexed indirect path draws everything.
+    f.r->settings().mesh_shading = false;
+    const u32 tasks = f.device.state.mesh_task_draws;
+    const u32 indexed = f.device.state.indirect_count_draws;
+    f.frame(s);
+    CHECK(f.device.state.mesh_task_draws == tasks);
+    CHECK(f.device.state.indirect_count_draws > indexed);
+    CHECK(f.r->stats().meshlet_instances == 0);
+
+    // Without the GPU-driven path there are no meshlet draws either.
+    f.r->settings().mesh_shading = true;
+    f.r->settings().gpu_culling = false;
+    f.frame(s);
+    CHECK(f.device.state.mesh_task_draws == tasks);
+    CHECK(f.device.state.errors.empty());
+    for (const std::string& e : f.device.state.errors) {
+        MESSAGE(e);
+    }
+}
+
+TEST_CASE("mesh shading: releasing a mesh frees its meshlet buffer") {
+    Fixture f(true, true);
+    const u32 destroyed = f.device.state.buffers_destroyed;
+    f.r->release(f.mesh);
+    f.frame(RenderScene{});
+    CHECK(f.device.state.buffers_destroyed > destroyed);
+    CHECK(f.device.state.errors.empty());
 }
 
 TEST_CASE("GPU-driven path without drawIndirectCount falls back to the CPU path") {

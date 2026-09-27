@@ -143,7 +143,7 @@ TextureHandle VulkanDevice::create_texture(const TextureDesc& in) {
     }
 
     const VkFormat format = to_vk(desc.format);
-    VkImageCreateFlags flags = cube ? VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT : 0u;
+    VkImageCreateFlags flags = cube ? static_cast<VkImageCreateFlags>(VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT) : 0u;
     // sRGB formats cannot be storage images: create MUTABLE and write through a UNORM view.
     const bool     srgb_storage = any(desc.usage & TextureUsage::Storage) && is_srgb(desc.format);
     const VkFormat view_formats[2] = { format, to_vk(srgb_to_unorm(desc.format)) };
@@ -399,7 +399,20 @@ void VulkanDevice::destroy(ShaderHandle h) {
 PipelineHandle VulkanDevice::create_graphics_pipeline(const GraphicsPipelineDesc& desc) {
     const ShaderRecord* vs = shaders_.get(desc.vertex);
     const ShaderRecord* fs = shaders_.get(desc.fragment);
-    if (!vs || vs->stage != ShaderStage::Vertex) {
+    const ShaderRecord* task_sh = shaders_.get(desc.task);
+    const ShaderRecord* mesh_sh = shaders_.get(desc.mesh);
+    const bool          mesh_pipeline = desc.mesh.is_valid(); // ADR-0010
+    if (mesh_pipeline) {
+        if (!features_.mesh_shaders) {
+            AE_LOG_ERROR("RHI", "pipeline '{}': mesh shaders are not supported by this device", desc.debug_name);
+            return {};
+        }
+        if (!mesh_sh || mesh_sh->stage != ShaderStage::Mesh || desc.vertex.is_valid() ||
+            (desc.task.is_valid() && (!task_sh || task_sh->stage != ShaderStage::Task))) {
+            AE_LOG_ERROR("RHI", "pipeline '{}': invalid task/mesh shader combination", desc.debug_name);
+            return {};
+        }
+    } else if (!vs || vs->stage != ShaderStage::Vertex) {
         AE_LOG_ERROR("RHI", "pipeline '{}': invalid vertex shader", desc.debug_name);
         return {};
     }
@@ -412,13 +425,26 @@ PipelineHandle VulkanDevice::create_graphics_pipeline(const GraphicsPipelineDesc
                     desc.push_constant_size);
     }
 
-    std::array<VkPipelineShaderStageCreateInfo, 2> stages{};
+    std::array<VkPipelineShaderStageCreateInfo, 3> stages{};
     u32                                            stage_count = 0;
-    stages[stage_count++] = { VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0, VK_SHADER_STAGE_VERTEX_BIT,
-                              vs->module, vs->entry_point.c_str(), nullptr };
+    auto add_stage = [&](VkShaderStageFlagBits bit, const ShaderRecord& r) {
+        VkPipelineShaderStageCreateInfo& st = stages[stage_count++];
+        st        = {};
+        st.sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+        st.stage  = bit;
+        st.module = r.module;
+        st.pName  = r.entry_point.c_str();
+    };
+    if (mesh_pipeline) {
+        if (task_sh) {
+            add_stage(VK_SHADER_STAGE_TASK_BIT_EXT, *task_sh);
+        }
+        add_stage(VK_SHADER_STAGE_MESH_BIT_EXT, *mesh_sh);
+    } else {
+        add_stage(VK_SHADER_STAGE_VERTEX_BIT, *vs);
+    }
     if (fs) {
-        stages[stage_count++] = { VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0,
-                                  VK_SHADER_STAGE_FRAGMENT_BIT, fs->module, fs->entry_point.c_str(), nullptr };
+        add_stage(VK_SHADER_STAGE_FRAGMENT_BIT, *fs);
     }
 
     std::vector<VkVertexInputBindingDescription> bindings;
@@ -511,8 +537,8 @@ PipelineHandle VulkanDevice::create_graphics_pipeline(const GraphicsPipelineDesc
     ci.pNext               = &rendering;
     ci.stageCount          = stage_count;
     ci.pStages             = stages.data();
-    ci.pVertexInputState   = &vertex_input;
-    ci.pInputAssemblyState = &ia;
+    ci.pVertexInputState   = mesh_pipeline ? nullptr : &vertex_input; // mesh pipelines have no vertex input
+    ci.pInputAssemblyState = mesh_pipeline ? nullptr : &ia;
     ci.pViewportState      = &viewport;
     ci.pRasterizationState = &raster;
     ci.pMultisampleState   = &ms;

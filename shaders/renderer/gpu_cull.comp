@@ -2,7 +2,9 @@
 // One thread per opaque/masked candidate. Visible candidates append a
 // VkDrawIndexedIndirectCommand (instanceCount 1, firstInstance = frame instance index, so
 // mesh.vert is shared with the CPU path) to their batch's slice of this phase's command array;
-// the per-batch counts feed vkCmdDrawIndexedIndirectCount.
+// the per-batch counts feed vkCmdDrawIndexedIndirectCount. Meshlet batches (ADR-0010) get a
+// VkDrawMeshTasksIndirectCommandEXT (one task workgroup per 32 meshlets) plus the candidate
+// index in the same 20-byte slot; meshlet.task finds it again through gl_DrawID.
 //   phase 0: frustum only (occlusion culling off)
 //   phase 1: frustum AND visible last frame (two-phase occlusion: draw last frame's set)
 //   phase 2: after the Hi-Z of phase 1: frustum AND not occluded AND not drawn in phase 1;
@@ -118,7 +120,18 @@ void main() {
     if (!in_frustum && pc.phase != AE_CULL_PHASE_1) {
         atomicAdd(pc.stats.values[AE_COUNTER_FRUSTUM_CULLED], 1u);
     }
-    if (emit) {
+    if (emit && (c.batch & AE_BATCH_MESHLET) != 0u) {
+        uint slot = atomicAdd(pc.counts.values[c.batch], 1u);
+        GpuMeshTaskCommand t;
+        t.group_x = (c.meshlet_count + AE_TASK_GROUP_SIZE - 1u) / AE_TASK_GROUP_SIZE;
+        t.group_y = 1u;
+        t.group_z = 1u;
+        t.candidate = i;
+        t.pad = 0u;
+        MeshTaskCommandBuffer(pc.draws).cmds[pc.view.batch_offset[c.batch] + slot] = t;
+        atomicAdd(pc.stats.values[AE_COUNTER_VISIBLE], 1u);
+        atomicAdd(pc.stats.values[AE_COUNTER_TRIANGLES], c.index_count / 3u);
+    } else if (emit) {
         uint slot = atomicAdd(pc.counts.values[c.batch], 1u);
         GpuDrawCommand cmd;
         cmd.index_count = c.index_count;

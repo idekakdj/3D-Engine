@@ -35,6 +35,9 @@ public:
     void draw_indexed_indirect(BufferHandle args, u64 offset, u32 draw_count, u32 stride) override;
     void draw_indexed_indirect_count(BufferHandle args, u64 offset, BufferHandle count_buffer,
                                      u64 count_offset, u32 max_draws, u32 stride) override;
+    void draw_mesh_tasks(u32 gx, u32 gy, u32 gz) override;
+    void draw_mesh_tasks_indirect_count(BufferHandle args, u64 offset, BufferHandle count_buffer, u64 count_offset,
+                                        u32 max_draws, u32 stride) override;
     void dispatch(u32 gx, u32 gy, u32 gz) override;
     void dispatch_indirect(BufferHandle args, u64 offset) override;
     void set_depth_bias(f32 constant_factor, f32 clamp, f32 slope_factor) override;

@@ -4,7 +4,7 @@
 > across rendering fidelity, editor/tooling, physics/animation, and scripting/gameplay.
 >
 > **Status:** Foundation phase (multi-session project). **Author:** Engine architect (orchestrator).
-> **Doc version:** 1.9 (ADR-0009 applied). Update this header on every material revision.
+> **Doc version:** 1.10 (ADR-0010 applied). Update this header on every material revision.
 
 ---
 
@@ -540,6 +540,7 @@ until it builds and its acceptance check passes.
 - **v1.7** — ADR-0007: golden-image render tests; `rhi::read_texture_rgba8` readback.
 - **v1.8** — ADR-0008: M1 baseline verified on Windows/MSVC/Intel Arc (build, tests, validation-clean runs, first hardware shadows, Arc golden references, Windows packaging).
 - **v1.9** — ADR-0009: M2 scope, additive contracts, three-agent wave.
+- **v1.10** — ADR-0010: M2 wave verified on Linux; meshlet mesh-shader path (ADR-0009 graphics stretch 1).
 
 ---
 
@@ -915,3 +916,61 @@ module reports, split into three agents with disjoint ownership (docs/AGENT_GUID
 - Arc golden cases pass unchanged — the GPU-driven path must reproduce the CPU path's images. Any intended
   visual change is re-recorded only after the images are reviewed, and reported.
 - New features carry tests (CPU where possible; golden cases for visual features).
+
+---
+
+## ADR-0010 — M2 wave verified on Linux; the meshlet mesh-shader path (2026-09-27)
+
+**Context.** The ADR-0009 wave (commit 851c037) landed without a close-out. Re-verified here on Linux
+(GCC 13, Mesa llvmpipe 25.2 / Vulkan 1.4, which exposes VK_EXT_mesh_shader): all 13 modules build,
+ctest 21/21 pass + `golden.shadows` skipped (llvmpipe), `vertical_slice --check`, `aether-editor
+--self-test` and `aether-player --check` pass validation-clean, and the GPU-driven path (GPU frustum +
+two-phase Hi-Z + indirect draws) is active, not falling back. All ADR-0009 core scope is present with
+tests (GPU culling / Hi-Z / picking, BC + mips + MikkTSpace + node animation + texture de-dup + mtime
+fast path, editor picking / multi-select / prefabs / drag-drop / material editor / snapping / anim
+view). Not done from ADR-0009: graphics stretch 2 (spot-light shadows — cannot be verified on
+llvmpipe, whose shadow sampling crashes; needs the Arc) and editor stretch (thumbnails).
+Environment note: this sandbox's proxy rejects GitHub archive tarballs, so MikkTSpace / bc7enc_rdo were
+provided via `FETCHCONTENT_SOURCE_DIR_*` clones at the pinned commits (no build-file change).
+
+**Decision: graphics stretch 1, the meshlet path.** Static (non-skinned) opaque/masked candidates of
+the GPU-driven path are drawn as meshlets through task + mesh shaders when
+`DeviceFeatures::mesh_shaders` and the new `RendererSettings::mesh_shading` (default on) allow it;
+everything else is unchanged.
+- **RHI (additive):** `GraphicsPipelineDesc::task/mesh` (mesh pipelines have no vertex input);
+  `CommandList::draw_mesh_tasks[_indirect_count]` as non-pure virtuals (logging defaults keep test
+  doubles compiling), implemented with `vkCmdDrawMeshTasks[IndirectCount]EXT`. Pre-existing GCC
+  `-Wextra` warning in `vk_resources.cpp` fixed.
+- **Build:** `cmake/deps/renderer.cmake` (the ADR-0009 hook) fetches meshoptimizer v0.25 (MIT, pinned
+  commit, library sources only) as `aether_meshoptimizer`, private to the renderer.
+- **Meshlets:** built per submesh at `register_mesh()` (<= 64 vertices / 124 triangles, cone weight
+  0.25, `meshopt_optimizeMeshlet`, sphere + normal-cone bounds) into one GPU buffer per mesh:
+  `GpuMeshlet[64 B] x n | u32 words` (mesh-local vertex indices, then triangles packed 8:8:8).
+  Winding is preserved. Released with the mesh.
+- **Culling:** instance culling is unchanged (`gpu_cull.comp`: frustum + two-phase Hi-Z). A new
+  batch bit (`kBatchMeshlet`, 16 -> 32 batches) routes static candidates to meshlet batches, for which
+  the cull shader writes `{ceil(n/32), 1, 1, candidate}` into the same 20-byte command slot.
+  `meshlet.task` (32 threads) tests each meshlet's world bounding sphere against the main-view planes
+  and meshoptimizer's apex cone (skipped for double-sided batches and mirrored / non-uniformly scaled
+  instances), compacts survivors in thread order (deterministic, no subgroup ops) and launches one
+  `meshlet.mesh` workgroup per survivor. The mesh shader repeats `mesh.vert`'s math expression for
+  expression, so prepass / forward / pick (Equal depth tests) stay consistent.
+- **Passes:** depth prepass (both phases), forward and pick use the 8 meshlet pipelines
+  (depth: masked x double-sided; forward, pick: double-sided); shadows, translucency and skinned
+  meshes keep the vertex path. `RendererStats::meshlet_instances` counts meshlet-drawn candidates.
+
+**Verification (llvmpipe).** Every golden case matches the existing (vertex-path) references with the
+meshlet path active: max channel diff <= 2, PSNR >= 78 dB (floating-point contraction differences).
+New ctest entries `golden.<case>.no_mesh_shading` check the vertex path against the same references;
+`aether-golden --no-mesh-shading` switches it off for A/B checks. Proof that the path is live: emitting
+no mesh tasks fails the goldens (spheres vanish); inverting the cone test culls every front-facing
+meshlet (spheres vanish; the non-uniformly scaled floor is correctly exempt). Unit tests: meshlet
+building (every triangle exactly once with its winding, limits, bounding spheres, cone convention ==
+the task shader's test), pipeline table (8 task/mesh permutations compile with glslang; absent without
+mesh shaders), mock-device path (mesh-task draws with stride 20, picking, fallbacks, buffer release).
+Validation clean in all app checks; the slice renders meshlet statics next to a vertex-path skinned
+character.
+
+**Open (needs the Arc):** `ctest -L golden` on the Intel Arc must pass unchanged with meshlets on (the
+Arc exposes mesh shaders); if a case differs, compare with `--no-mesh-shading` before re-recording.
+Spot-light shadows (ADR-0009 stretch 2) and editor thumbnails remain.

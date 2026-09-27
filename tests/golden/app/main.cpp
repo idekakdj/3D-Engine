@@ -1,6 +1,7 @@
 // aether-golden — golden-image render tests.
 //
-//   aether-golden --case <name> [--update] [--reference-dir D] [--output-dir D] [shared app flags]
+//   aether-golden --case <name> [--update] [--reference-dir D] [--output-dir D] [--no-mesh-shading]
+//                 [shared app flags]
 //   aether-golden --list
 //
 // Builds the case's scene with built-in meshes and runtime materials, renders it offscreen at a
@@ -8,6 +9,8 @@
 // in these scenes depends on wall-clock time), reads the final target back and compares it with
 // <reference-dir>/<device class>/<case>.png (image_compare.h). --update (re)writes the reference.
 // On a mismatch the actual image and a diff image are written to the output directory.
+// --no-mesh-shading draws static meshes through the indexed indirect path instead of the
+// meshlet task/mesh shaders (ADR-0010); both paths must match the same reference.
 //
 // Exit codes: 0 match / reference written, 1 mismatch or failure, 2 usage, 77 skipped (no
 // reference recorded for this device class, or the case needs a feature the device lacks).
@@ -245,6 +248,7 @@ struct GoldenArgs {
     std::string case_name;
     bool        update = false;
     bool        list   = false;
+    bool        no_mesh_shading = false;
     fs::path    reference_dir;
     fs::path    output_dir;
     bool        usage_error = false;
@@ -279,6 +283,9 @@ protected:
             return Error{ ErrorCode::OutOfMemory, "cannot create the golden render target" };
         }
         set_render_extent(UVec2(kWidth, kHeight));
+        if (args_.no_mesh_shading) {
+            renderer().settings().mesh_shading = false;
+        }
 
         auto* bridge = find_subsystem<RenderBridgeSubsystem>();
         if (bridge == nullptr || bridge->cache() == nullptr) {
@@ -417,6 +424,8 @@ GoldenArgs parse_args(int argc, char** argv) {
             a.update = true;
         } else if (std::strcmp(s, "--list") == 0) {
             a.list = true;
+        } else if (std::strcmp(s, "--no-mesh-shading") == 0) {
+            a.no_mesh_shading = true;
         } else if (std::strcmp(s, "--reference-dir") == 0) {
             value(a.reference_dir);
         } else if (std::strcmp(s, "--output-dir") == 0) {

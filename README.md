@@ -16,7 +16,7 @@ relocatable game builds.
 |---|---|
 | `engine/core` | math, logging, jobs, window/input, paths, errors |
 | `engine/rhi` | render hardware interface + Vulkan backend, ImGui backend |
-| `engine/renderer` | render graph, clustered forward+, shadows, SSAO, TAA, bloom, IBL |
+| `engine/renderer` | render graph, clustered forward+, GPU-driven culling (Hi-Z), meshlet mesh shading, shadows, SSAO, TAA, bloom, IBL |
 | `engine/scene` | EnTT world, hierarchy, transforms, scene serializer |
 | `engine/assets` | glTF / image importers, asset database, cooker, async AssetManager |
 | `engine/physics` | Jolt integration (bodies, characters, constraints, queries) |
