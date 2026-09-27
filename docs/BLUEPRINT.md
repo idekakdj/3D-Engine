@@ -1039,7 +1039,7 @@ previews, and an on-disk thumbnail cache (thumbnails are regenerated per session
 
 ## ADR-0012 — Spot-light shadows; delivery as a downloadable local application (2026-09-27)
 
-**Status:** accepted (spot shadows verified on llvmpipe; Arc run pending). Closes ADR-0009 graphics
+**Status:** accepted; verified on llvmpipe and the Intel Arc. Closes ADR-0009 graphics
 stretch 2, the last open item of the M2 plan.
 
 **Owner requirement recorded.** The project owner clarified the product goal: Unreal-class capabilities
@@ -1075,8 +1075,12 @@ clamp to 8), out-of-view and non-casting spots skipped, the pass disappears when
 casters, independence from `shadows`, clean command streams. All previous goldens unchanged
 (max diff <= 2); ctest 25/25 + sun `shadows` skipped; slice / editor self-test / player validation clean.
 
-**Pending (needs the Arc):** record `tests/golden/reference/intel_r_arc_tm_graphics/spot_shadows.png`
-after reviewing the Arc image, and confirm the other Arc goldens still match.
+**Verified on the Intel Arc (2026-09-27).** The 9 existing Arc goldens still match bit-identically
+(max diff 0, shadows included); the Arc `spot_shadows` image was reviewed (same shadows as llvmpipe,
+attached, no acne) and recorded as the Arc reference (commit 527fc43). In the editor the owner
+confirmed spot lights with shadows, the inspector controls (cast shadows, cones, range) and the Engine
+panel "Spot shadows" toggle. The startup-scan fix below was confirmed on the Arc ("content scan: 6
+sources, 6 imported, 0 failed"; the textured cube and skinned model render).
 
 **Not done:** point-light (cube) shadows, shadow caching for static lights, and the sun + spot shadow
 interaction in the ShadowCascades debug view.
