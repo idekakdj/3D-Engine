@@ -1,0 +1,12 @@
+{
+  "format": "aether.project",
+  "version": 1,
+  "name": "Aether Showcase",
+  "startup_scene": "scenes/showcase.aescene",
+  "content_root": "content",
+  "cooked_root": "assets",
+  "cooked_assets": false,
+  "window": { "title": "Aether Showcase", "width": 1280, "height": 720, "resizable": true, "vsync": true },
+  "rendering": { "exposure": 1.0, "sky": true },
+  "camera_controller": true
+}

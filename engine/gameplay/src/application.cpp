@@ -217,6 +217,8 @@ Result<void> Application::initialize() {
     s.assets = std::make_unique<assets::AssetManager>();
     assets::AssetManagerConfig ac;
     ac.content_root = s.desc.content_root.empty() ? paths::content_dir() : s.desc.content_root;
+    ac.cooked_root  = s.desc.cooked_root; // empty => paths::asset_dir()
+    ac.mode         = s.desc.cooked_assets_only ? assets::AssetLoadMode::Runtime : assets::AssetLoadMode::Editor;
     if (auto a = s.assets->initialize(ac); !a) {
         return a.error();
     }

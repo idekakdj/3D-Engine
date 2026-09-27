@@ -536,6 +536,7 @@ until it builds and its acceptance check passes.
 - **v1.3** — ADR-0003: gameplay becomes the engine assembly layer (4b); `Application` contract frozen for Wave B.
 - **v1.4** — ADR-0004: Wave A closed (scripting, animation tests), gameplay implemented, M1 vertical slice, Linux/llvmpipe headless verification path.
 - **v1.5** — ADR-0005: the editor (Wave B complete).
+- **v1.6** — ADR-0006: the runtime player, project manifests and packaging; `AppDesc` cooked-asset fields.
 
 ---
 
@@ -755,4 +756,47 @@ texture are freed.
 
 **Not done yet:** GPU id-buffer picking and multi-select, prefab assets, a material editor, asset
 thumbnails, drag-from-asset-browser into the viewport, an animation graph editor, the `runtime/`
-player, and golden-image tests.
+player (done: ADR-0006), and golden-image tests.
+
+---
+
+## ADR-0006 — The runtime player
+
+**Status:** accepted. **Scope:** `runtime/` (`aether.runtime` + `aether-player`), an additive
+`AppDesc` amendment, `game.aeproject`.
+
+**Contract change (additive, `gameplay/application.h`).** `AppDesc` gains two trailing fields with
+defaults: `cooked_assets_only` (the Application initialises its AssetManager in
+`AssetLoadMode::Runtime`: cooked data only, no source import, no hot reload) and `cooked_root`
+(empty => `paths::asset_dir()`). Existing code and aggregate initialisers are unaffected.
+
+**Project manifest (`.aeproject`, JSON, `format: "aether.project"`, version 1).** Name, startup scene
+(content-relative), content/cooked roots (relative to the manifest), `cooked_assets`, an optional
+InputMap JSON, window (title, size, resizable, vsync, fullscreen), simulation (fixed delta, max steps),
+rendering (exposure, sky) and `camera_controller`. Every key but `format` is optional; unknown keys warn
+and are ignored so newer manifests still load. The repository root's `game.aeproject` runs the
+showcase scene from source during development.
+
+**Player (`aether-player`).** A slim `gameplay::Application`: no ImGui, validation only in debug builds,
+the project's input map (else the default camera bindings) plus `Player.Quit` (Esc) and
+`Player.ToggleFullscreen` (F11, borderless on the primary monitor via GLFW), and an optional
+`CameraControllerSubsystem` (Simulation kind) so `FlyCamera`/`OrbitCamera` scene cameras work. Without
+a project argument it runs the `*.aeproject` next to the executable, else the one in the engine root.
+`--cooked` / `--source-assets` override the manifest's asset mode.
+
+**Packaging (`aether-player --package <dir>`).** Cooks every importable source into `<dir>/assets`
+(the AssetDatabase scan, incremental), copies the runtime-read content (`.aescene`, `.aeprefab`,
+`.lua`, `.json`), the shader tree and the player itself, and writes `<dir>/game.aeproject` with
+`cooked_assets: true` and roots relative to it. `paths::engine_root()` resolves to `<dir>` (it holds
+`shaders/`), so the package is relocatable. Source models and dev-only files are not shipped.
+
+**Verification.** `aether-player --frames N --check` asserts the scene loaded, the scene camera
+rendered it, no mesh is pending or failed, every enabled script is running with no errors and
+physics created its bodies. Verified on llvmpipe (validation clean): the dev tree from source, and a
+package moved to another directory running cooked-only; deleting cooked files makes the check fail.
+`test.runtime` covers manifest parsing/round-trip, discovery, `apply_project` and packaging followed
+by a Runtime-mode load of the packaged data.
+
+**Not done yet:** archive/pak files (the package is a loose directory), shader precompilation into
+the package (shaders still compile at startup), a Windows packaging run, a launcher/splash screen and
+save-game support.

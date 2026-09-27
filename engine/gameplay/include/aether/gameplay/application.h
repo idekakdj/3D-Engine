@@ -57,6 +57,10 @@ struct AppDesc {
     std::filesystem::path content_root;             // empty => paths::content_dir()
     std::filesystem::path startup_scene;            // optional .aescene, relative to content_root
     u64                   max_frames = 0;           // 0 = unlimited; automation exits after N frames
+    // ADR-0006 (additive): shipping builds load cooked data only (AssetLoadMode::Runtime: no
+    // source import, no hot reload). cooked_root: empty => paths::asset_dir().
+    bool                  cooked_assets_only = false;
+    std::filesystem::path cooked_root;
 };
 
 // Parses the shared CLI flags into `defaults`: --frames N, --scene <path>, --no-validation,
