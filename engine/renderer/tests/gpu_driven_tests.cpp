@@ -6,6 +6,7 @@
 #include "mock_device.h"
 #include "render_math.h"
 
+#include "aether/renderer/instance_flags.h"
 #include "aether/renderer/renderer.h"
 
 #include <doctest/doctest.h>
@@ -281,6 +282,66 @@ TEST_CASE("mesh shading: releasing a mesh frees its meshlet buffer") {
     f.frame(RenderScene{});
     CHECK(f.device.state.buffers_destroyed > destroyed);
     CHECK(f.device.state.errors.empty());
+}
+
+TEST_CASE("spot shadows: selection, budget, pass and fallbacks (ADR-0012)") {
+    Fixture f(true);
+    RenderScene s = f.scene(40);
+    s.lights.clear();
+    auto spot = [](Vec3 pos, Vec3 dir, bool shadows) {
+        RenderLight l;
+        l.type = LightType::Spot;
+        l.position = pos;
+        l.direction = glm::normalize(dir);
+        l.range = 30.0f;
+        l.outer_cone = 0.7f;
+        l.inner_cone = 0.8f;
+        l.cast_shadows = shadows;
+        return l;
+    };
+    for (int i = 0; i < 6; ++i) { // six shadow-casting spots over the instance grid
+        s.lights.push_back(spot(Vec3(f32(i) * 4.0f - 10.0f, 8.0f, -5.0f), Vec3(0, -1, 0), true));
+    }
+    s.lights.push_back(spot(Vec3(0, 8, -5), Vec3(0, -1, 0), false));       // no shadows requested
+    s.lights.push_back(spot(Vec3(0, 8, 400), Vec3(0, -1, 0), true));       // behind the camera, out of view
+    for (RenderMeshInstance& inst : s.instances) {
+        inst.flags |= instance_flags::kCastShadow;
+    }
+    f.frame(s);
+    CHECK(f.r->stats().spot_shadow_maps == 4); // default budget
+    CHECK(f.logged("SpotShadow"));
+
+    f.r->settings().max_spot_shadows = 2;
+    f.device.state.log.clear();
+    f.frame(s);
+    CHECK(f.r->stats().spot_shadow_maps == 2);
+
+    f.r->settings().max_spot_shadows = 99; // clamped to kMaxSpotShadows
+    f.frame(s);
+    CHECK(f.r->stats().spot_shadow_maps == 6);
+
+    f.r->settings().spot_shadows = false;
+    f.device.state.log.clear();
+    f.frame(s);
+    CHECK(f.r->stats().spot_shadow_maps == 0);
+    CHECK_FALSE(f.logged("SpotShadow"));
+
+    // Independent of the cascaded (sun) shadows switch, which software rasterisers turn off.
+    f.r->settings().spot_shadows = true;
+    f.r->settings().shadows = false;
+    f.frame(s);
+    CHECK(f.r->stats().spot_shadow_maps == 6);
+
+    // No casters: no shadow maps are rendered.
+    for (RenderMeshInstance& inst : s.instances) {
+        inst.flags &= ~instance_flags::kCastShadow;
+    }
+    f.frame(s);
+    CHECK(f.r->stats().spot_shadow_maps == 0);
+    CHECK(f.device.state.errors.empty());
+    for (const std::string& e : f.device.state.errors) {
+        MESSAGE(e);
+    }
 }
 
 TEST_CASE("GPU-driven path without drawIndirectCount falls back to the CPU path") {

@@ -579,8 +579,9 @@ Entity EditorApp::create_entity(CreateKind kind, Entity parent) {
     }
     case CreateKind::SpotLight: {
         LightComponent l;
-        l.kind      = LightKind::Spot;
-        l.intensity = 30.0f;
+        l.kind         = LightKind::Spot;
+        l.intensity    = 30.0f;
+        l.cast_shadows = true; // ADR-0012: spot shadows are cheap (one map per light, budgeted)
         w.add<LightComponent>(e, l);
         scene::set_local_rotation(w, e, gameplay::rotation_from_yaw_pitch(0.0f, -60.0f));
         break;

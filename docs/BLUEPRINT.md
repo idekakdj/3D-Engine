@@ -4,7 +4,7 @@
 > across rendering fidelity, editor/tooling, physics/animation, and scripting/gameplay.
 >
 > **Status:** Foundation phase (multi-session project). **Author:** Engine architect (orchestrator).
-> **Doc version:** 1.11 (ADR-0011 applied). Update this header on every material revision.
+> **Doc version:** 1.12 (ADR-0012 applied). Update this header on every material revision.
 
 ---
 
@@ -26,6 +26,12 @@ Build a modern, data-oriented, GPU-driven engine with a production-grade editor.
 virtualized geometry, a full scene editor, a robust physics/animation stack, and a gameplay +
 scripting framework — while being leaner, more hackable, and Vulkan-first.
 
+**Delivery (owner requirement, ADR-0012):** Aether ships as a **downloadable desktop application that
+runs entirely locally** — the user downloads an installer/archive, installs it, and launches the editor
+like any other program: no source build, no compiler or SDK, no account, no cloud service, works
+offline. Games made with it are exported as standalone local executables (`aether-player --package`,
+ADR-0006).
+
 ### 1.2 What "rival Unreal" concretely means (capability targets)
 | Pillar | Unreal reference feature | Aether target (phased) |
 |---|---|---|
@@ -38,11 +44,13 @@ scripting framework — while being leaner, more hackable, and Vulkan-first.
 | Gameplay | Actor/Component + Blueprints | ECS + gameplay framework + Lua scripting (visual scripting later) |
 | Assets | UAsset + cook | GUID asset DB, glTF/stb/KTX2 import, offline cooker, hot-reload |
 | Platforms | Win/Linux/Mac/consoles | Windows-first; Linux via SDL/Vulkan parity kept in the abstraction |
+| Distribution | Unreal Editor installed from a download | Standalone installer (Windows first): editor + player + shaders + starter content, runs offline |
 
 ### 1.3 Non-goals (explicitly out of scope, at least for the first several milestones)
 - Console platform ports (NDA toolchains), mobile/GLES/Metal backends.
 - A bespoke shading language/compiler (we use GLSL/HLSL → SPIR-V via glslang/DXC).
-- A marketplace, launcher, or cloud services.
+- A marketplace, launcher, or cloud services. (A plain downloadable installer of the editor is IN scope —
+  see "Delivery" above; only an Epic-style launcher/store is out.)
 - Backwards ABI compatibility guarantees during pre-1.0 (we refactor freely).
 - Photoreal film-quality path tracing (a debug reference path tracer is a *stretch* goal only).
 
@@ -542,6 +550,7 @@ until it builds and its acceptance check passes.
 - **v1.9** — ADR-0009: M2 scope, additive contracts, three-agent wave.
 - **v1.10** — ADR-0010: M2 wave verified on Linux; meshlet mesh-shader path (ADR-0009 graphics stretch 1).
 - **v1.11** — ADR-0011: asset-browser thumbnails (ADR-0009 editor stretch); toolbar / layout fixes.
+- **v1.12** — ADR-0012: spot-light shadows (ADR-0009 graphics stretch 2); delivery as a downloadable local app made explicit.
 
 ---
 
@@ -1025,3 +1034,49 @@ Not yet checked on the Arc.
 **Not done:** material thumbnails (materials live inside glTF files; the editor's material
 instances are not rendered by the thumbnail renderer and show the default material), animated
 previews, and an on-disk thumbnail cache (thumbnails are regenerated per session).
+
+---
+
+## ADR-0012 — Spot-light shadows; delivery as a downloadable local application (2026-09-27)
+
+**Status:** accepted (spot shadows verified on llvmpipe; Arc run pending). Closes ADR-0009 graphics
+stretch 2, the last open item of the M2 plan.
+
+**Owner requirement recorded.** The project owner clarified the product goal: Unreal-class capabilities
+(§1.2, unchanged) **delivered as a downloadable app that installs and runs locally** (§1.1 "Delivery",
+new §1.2 row, clarified non-goal). Today the editor is a native local program but must be built from
+source; producing an installable build (editor + player + shaders + starter content, no toolchain
+needed) is the next distribution milestone.
+
+**Decision: spot-light shadows.**
+- `RendererSettings` (additive): `spot_shadows` (default on), `spot_shadow_map_size` (1024),
+  `max_spot_shadows` (4, capped at `kMaxSpotShadows` = 8); `RendererStats::spot_shadow_maps`.
+- Spot lights with `cast_shadows` are candidates; those whose light sphere reaches the view are sorted by
+  distance and the nearest `max_spot_shadows` get a layer of a D32F `Tex2DArray` ("SpotShadowMaps").
+  Each uses a reverse-Z perspective from the light: half-angle = outer cone + 2 deg (PCF margin), capped
+  at 80 deg; near = range/100 (clamped 0.02..0.5 m); far = range.
+- Casters are culled per light on the CPU (frustum vs world AABB) into shadow draw lists; the
+  `SpotShadows` graph pass renders each layer with the existing shadow pipelines
+  (`view_index = 1 + kMaxCascades + slot`, read by `mesh.vert` / `meshlet.mesh`), depth bias
+  (-1, slope -1.5).
+- Shading: `GpuLight::shadow` of a spot = its `GpuSpotShadow` index (view-proj, texel scale, layer; new
+  per-frame `SpotShadowBuffer`, `GpuFrame` grows 1016 -> 1032 bytes). `ae_spot_shadow` does 3x3
+  tent-weighted bilinear PCF with **textureGather + in-shader reverse-Z comparison** on a point sampler
+  and a normal offset of ~1.5 texels at the receiver's distance. Not using a compare sampler avoids the
+  Mesa llvmpipe depth-compare crash (ADR-0004), so spot shadows are independent of the cascaded
+  `shadows` switch and work on software rasterisers too.
+- Editor: *Create > Spot Light* casts shadows by default; Engine panel gets a "Spot shadows" toggle
+  and the spot-shadow-map count. The inspector already exposes cast shadows and the cone angles.
+
+**Verification (Linux / llvmpipe).** New golden case `spot_shadows` (two coloured shadow-casting spots
+over a pillar, box and sphere; no sun): shadow directions checked against both lights, contact-attached,
+no acne; llvmpipe reference recorded after review. Mock-device test: budget (default 4, setting 2,
+clamp to 8), out-of-view and non-casting spots skipped, the pass disappears when disabled or without
+casters, independence from `shadows`, clean command streams. All previous goldens unchanged
+(max diff <= 2); ctest 25/25 + sun `shadows` skipped; slice / editor self-test / player validation clean.
+
+**Pending (needs the Arc):** record `tests/golden/reference/intel_r_arc_tm_graphics/spot_shadows.png`
+after reviewing the Arc image, and confirm the other Arc goldens still match.
+
+**Not done:** point-light (cube) shadows, shadow caching for static lights, and the sun + spot shadow
+interaction in the ShadowCascades debug view.

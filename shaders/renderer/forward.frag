@@ -108,6 +108,9 @@ void main() {
         if (l.type == AE_LIGHT_SPOT) {
             float s = clamp(dot(-L, l.direction) * l.spot_scale + l.spot_offset, 0.0, 1.0);
             atten *= s * s;
+            if (atten > 0.0 && l.shadow != AE_INVALID_INDEX) {
+                atten *= ae_spot_shadow(frame, l.shadow, v_world_pos, Ng, L, d); // ADR-0012
+            }
         }
         if (atten > 0.0) {
             color += ae_evaluate_brdf(N, V, L, diffuse_color, f0, alpha, energy_comp) * l.color * atten;

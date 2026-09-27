@@ -88,6 +88,7 @@ void RendererImpl::setup_view(const RenderScene& scene) {
 
 void RendererImpl::setup_lights(const RenderScene& scene) {
     gpu_lights_.clear();
+    spot_candidates_.clear();
     directional_count_ = 0;
     shadow_light_ = -1;
     // Directional lights first: the shader loops over [0, directional_count) globally and
@@ -116,6 +117,10 @@ void RendererImpl::setup_lights(const RenderScene& scene) {
                 const f32 inner = std::clamp(std::max(l.inner_cone, outer + 1e-4f), -1.0f, 1.0f);
                 g.spot_scale = 1.0f / std::max(inner - outer, 1e-4f);
                 g.spot_offset = -outer * g.spot_scale;
+                if (l.cast_shadows && settings_.spot_shadows) { // ADR-0012: selected in setup_spot_shadows()
+                    spot_candidates_.push_back(
+                        SpotCandidate{ static_cast<u32>(gpu_lights_.size()), g.position, g.direction, g.range, outer });
+                }
                 break;
             }
             }
@@ -636,6 +641,121 @@ void RendererImpl::ensure_shadow_map() {
     shadow_map_.state = rhi::ResourceState::Undefined;
 }
 
+// ===========================================================================
+// Spot-light shadows (ADR-0012)
+// ===========================================================================
+void RendererImpl::setup_spot_shadows() {
+    spot_shadows_.clear();
+    const u32 budget = std::min(settings_.max_spot_shadows, kMaxSpotShadows);
+    if (spot_candidates_.empty() || budget == 0 || !has_casters_ ||
+        !pipelines_->get(mesh_pipeline_index(MeshPass::Shadow, false, false, false)).is_valid()) {
+        return;
+    }
+    // Only spots whose light volume reaches the view; the nearest ones win.
+    std::vector<std::pair<f32, const SpotCandidate*>> order;
+    for (const SpotCandidate& c : spot_candidates_) {
+        if (!frustum_intersects_sphere(view_.frustum, c.position, c.range)) {
+            continue;
+        }
+        order.emplace_back(glm::length(c.position - view_.camera_pos) - c.range, &c);
+    }
+    std::stable_sort(order.begin(), order.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+    if (order.size() > budget) {
+        order.resize(budget);
+    }
+    if (order.empty()) {
+        return;
+    }
+    ensure_spot_shadow_map();
+    if (!spot_shadow_map_.texture.is_valid()) {
+        return;
+    }
+    const f32 size = static_cast<f32>(spot_shadow_map_.size.x);
+    for (const auto& [key, c] : order) {
+        (void)key;
+        // Cone half-angle + a small margin (PCF footprint), capped: wider cones are unshadowed
+        // outside the capped frustum rather than losing all resolution.
+        const f32  half = std::clamp(std::acos(std::clamp(c->outer_cos, -1.0f, 1.0f)) + 2.0f * kDeg2Rad,
+                                    1.0f * kDeg2Rad, 80.0f * kDeg2Rad);
+        const f32  near_z = std::clamp(c->range * 0.01f, 0.02f, 0.5f);
+        const f32  far_z = std::max(c->range, near_z * 2.0f);
+        const Vec3 up = std::abs(c->direction.y) > 0.99f ? Vec3(1.0f, 0.0f, 0.0f) : Vec3(0.0f, 1.0f, 0.0f);
+        const Mat4 view = look_at(c->position, c->position + c->direction, up);
+        const Mat4 proj = to_reverse_z(perspective(2.0f * half, 1.0f, near_z, far_z), near_z);
+        SpotShadowSetup sh;
+        sh.light = c->light;
+        sh.view_proj = proj * view;
+        sh.frustum = extract_frustum(sh.view_proj, true, false);
+        sh.texel_scale = 2.0f * std::tan(half) / size;
+        gpu_lights_[c->light].shadow = static_cast<u32>(spot_shadows_.size());
+        spot_shadows_.push_back(sh);
+    }
+    stats_.spot_shadow_maps = static_cast<u32>(spot_shadows_.size());
+}
+
+void RendererImpl::cull_spot_shadows(const RenderScene& scene) {
+    for (auto& l : spot_draws_) {
+        l.clear();
+    }
+    if (spot_shadows_.empty()) {
+        return;
+    }
+    for (u32 i = 0; i < resolved_.size(); ++i) {
+        const ResolvedInstance& r = resolved_[i];
+        if (!r.valid || !r.caster) {
+            continue;
+        }
+        const bool never_cull = instance_flags::has(scene.instances[i].flags, instance_flags::kNeverCull);
+        DrawItem d;
+        d.instance = i;
+        d.first_index = r.first_index;
+        d.index_count = r.index_count;
+        d.vertex_offset = r.vertex_offset;
+        d.skin_arena = r.skin_arena;
+        d.skinned = r.skinned;
+        d.double_sided = r.double_sided;
+        const bool masked = r.blend == static_cast<u8>(BlendMode::Masked);
+        d.pipeline = mesh_pipeline_index(MeshPass::Shadow, r.skinned, masked, r.double_sided);
+        d.key = (static_cast<u64>(d.pipeline) << 40) | (static_cast<u64>(d.skin_arena) << 32) | r.material;
+        for (u32 s = 0; s < spot_shadows_.size(); ++s) {
+            if (never_cull || frustum_intersects_aabb(spot_shadows_[s].frustum, r.bounds)) {
+                spot_draws_[s].push_back(d);
+            }
+        }
+    }
+    auto by_key = [](const DrawItem& a, const DrawItem& b) { return a.key < b.key; };
+    for (u32 s = 0; s < spot_shadows_.size(); ++s) {
+        std::sort(spot_draws_[s].begin(), spot_draws_[s].end(), by_key);
+    }
+}
+
+void RendererImpl::ensure_spot_shadow_map() {
+    const u32 size = std::clamp(settings_.spot_shadow_map_size, 128u, 4096u);
+    const u32 layers = std::clamp(settings_.max_spot_shadows, 1u, kMaxSpotShadows);
+    if (spot_shadow_map_.texture.is_valid() && spot_shadow_map_.size.x == size && spot_shadow_map_.layers == layers) {
+        return;
+    }
+    destroy_persistent(spot_shadow_map_); // device defers destruction past in-flight frames
+    rhi::TextureDesc d;
+    d.type = rhi::TextureType::Tex2DArray;
+    d.format = kShadowFormat;
+    d.width = size;
+    d.height = size;
+    d.array_layers = layers;
+    d.usage = rhi::TextureUsage::DepthAttach | rhi::TextureUsage::Sampled;
+    d.debug_name = "SpotShadowMaps";
+    spot_shadow_map_.texture = device_.create_texture(d);
+    if (!spot_shadow_map_.texture.is_valid()) {
+        AE_LOG_ERROR("Renderer", "spot shadow map creation failed ({}^2 x {})", size, layers);
+        return;
+    }
+    // Point sampling: the shader gathers and compares itself (no compare sampler, see shadows.glsl).
+    spot_shadow_map_.sampled = device_.register_texture(spot_shadow_map_.texture, point_clamp_);
+    spot_shadow_map_.size = UVec2(size);
+    spot_shadow_map_.layers = layers;
+    spot_shadow_map_.state = rhi::ResourceState::Undefined;
+}
+
 void RendererImpl::ensure_history() {
     if (history_[0].texture.is_valid() && history_[0].size == output_size_) {
         return;
@@ -799,7 +919,8 @@ void RendererImpl::render(const RenderScene& scene, rhi::CommandList& cmd, const
                       FrameArena::padded(std::max<usize>(n_inst, 1) * sizeof(GpuCullInstance)) +
                       FrameArena::padded(sizeof(GpuCullView)) +
                       FrameArena::padded(std::max<usize>(n_inst, 1) * sizeof(u32)) +
-                      FrameArena::kAlignment * 12;
+                      FrameArena::padded(kMaxSpotShadows * sizeof(GpuSpotShadow)) +
+                      FrameArena::kAlignment * 13;
     if (!frame_arena_.begin_frame(slot, bytes)) {
         cmd.pop_debug_group();
         return;
@@ -813,8 +934,9 @@ void RendererImpl::render(const RenderScene& scene, rhi::CommandList& cmd, const
     const auto a_cull = frame_arena_.allocate_array<GpuCullInstance>(std::max<usize>(n_inst, 1));
     const auto a_cull_view = frame_arena_.allocate(sizeof(GpuCullView));
     const auto a_uid = frame_arena_.allocate_array<u32>(std::max<usize>(n_inst, 1));
+    const auto a_spot = frame_arena_.allocate_array<GpuSpotShadow>(kMaxSpotShadows);
     if (!a_frame.valid() || !a_inst.valid() || !a_mat.valid() || !a_light.valid() || !a_joint.valid() ||
-        !a_line.valid() || !a_cull.valid() || !a_cull_view.valid() || !a_uid.valid()) {
+        !a_line.valid() || !a_cull.valid() || !a_cull_view.valid() || !a_uid.valid() || !a_spot.valid()) {
         cmd.pop_debug_group();
         return;
     }
@@ -825,6 +947,8 @@ void RendererImpl::render(const RenderScene& scene, rhi::CommandList& cmd, const
     setup_cascades();
     cull_cascades(scene);
     build_draw_lists(scene);
+    setup_spot_shadows(); // assigns GpuLight::shadow before the light upload below
+    cull_spot_shadows(scene);
     if (gpu_.active) {
         write_cull_data(static_cast<GpuCullInstance*>(a_cull.cpu), static_cast<GpuCullView*>(a_cull_view.cpu));
         gpu_.candidates_gpu = a_cull.gpu;
@@ -863,6 +987,19 @@ void RendererImpl::render(const RenderScene& scene, rhi::CommandList& cmd, const
     GpuFrame frame;
     write_frame_constants(scene, frame, a_inst.gpu, a_mat.gpu, a_light.gpu, a_joint.gpu, a_line.gpu);
     frame.user_ids = a_uid.gpu;
+    if (!spot_shadows_.empty()) { // ADR-0012
+        auto* dst = static_cast<GpuSpotShadow*>(a_spot.cpu);
+        for (u32 i = 0; i < spot_shadows_.size(); ++i) {
+            GpuSpotShadow g;
+            g.view_proj = spot_shadows_[i].view_proj;
+            g.texel_scale = spot_shadows_[i].texel_scale;
+            g.layer = i;
+            std::memcpy(&dst[i], &g, sizeof(GpuSpotShadow));
+        }
+        frame.spot_shadows = a_spot.gpu;
+        frame.spot_shadow_map = didx(spot_shadow_map_.sampled);
+        frame.spot_shadow_count = static_cast<u32>(spot_shadows_.size());
+    }
     std::memcpy(a_frame.cpu, &frame, sizeof(GpuFrame));
     frame_gpu_address_ = a_frame.gpu;
     stats_.lights = static_cast<u32>(gpu_lights_.size());
@@ -940,6 +1077,47 @@ void RendererImpl::build_graph(const RenderScene& scene, const RenderTarget& tar
                     push.view_index = 1 + c;
                     push.pass_flags = kPassFlagShadow;
                     draw_items(ctx.cmd, cascade_draws_[c], push, false);
+                    ctx.cmd.end_rendering();
+                    ctx.cmd.pop_debug_group();
+                }
+            });
+    }
+
+    // ---- spot-light shadow maps (ADR-0012) ----
+    RGTexture spot_shadow;
+    if (!spot_shadows_.empty()) {
+        RGTextureDesc sd;
+        sd.type = rhi::TextureType::Tex2DArray;
+        sd.format = kShadowFormat;
+        sd.width = sd.height = spot_shadow_map_.size.x;
+        sd.array_layers = spot_shadow_map_.layers;
+        spot_shadow = g.import_texture(spot_shadow_map_.texture, sd, spot_shadow_map_.state,
+                                       rhi::ResourceState::ShaderRead, "SpotShadowMaps", didx(spot_shadow_map_.sampled));
+        g.add_pass("SpotShadows")
+            .write(spot_shadow, rhi::ResourceState::DepthStencilAttachment)
+            .execute([this, frame_addr](RGContext& ctx) {
+                const UVec2 ss = spot_shadow_map_.size;
+                for (u32 s = 0; s < spot_shadows_.size(); ++s) {
+                    ctx.cmd.push_debug_group("SpotShadow");
+                    rhi::RenderingInfo ri;
+                    ri.render_area = ss;
+                    ri.has_depth = true;
+                    ri.depth.texture = spot_shadow_map_.texture;
+                    ri.depth.layer = s;
+                    ri.depth.load = rhi::LoadOp::Clear;
+                    ri.depth.store = rhi::StoreOp::Store;
+                    ri.depth.clear_depth = 0.0f; // reverse-Z
+                    ctx.cmd.begin_rendering(ri);
+                    ctx.cmd.set_viewport(full_viewport(ss));
+                    ctx.cmd.set_scissor(full_scissor(ss));
+                    // Reverse-Z: negative bias pushes occluders away from the light; the shader
+                    // adds a normal offset scaled by the texel size at the receiver's distance.
+                    ctx.cmd.set_depth_bias(-1.0f, 0.0f, -1.5f);
+                    MeshPush push;
+                    push.frame = frame_addr;
+                    push.view_index = 1 + kMaxCascades + s;
+                    push.pass_flags = kPassFlagShadow;
+                    draw_items(ctx.cmd, spot_draws_[s], push, false);
                     ctx.cmd.end_rendering();
                     ctx.cmd.pop_debug_group();
                 }
@@ -1248,6 +1426,7 @@ void RendererImpl::build_graph(const RenderScene& scene, const RenderTarget& tar
         fwd.write(hdr, rhi::ResourceState::ColorAttachment)
             .read(depth, rhi::ResourceState::DepthStencilAttachment)
             .read(shadow, rhi::ResourceState::ShaderRead)
+            .read(spot_shadow, rhi::ResourceState::ShaderRead)
             .read(ao, rhi::ResourceState::ShaderRead)
             .read(light_grid, rhi::ResourceState::ShaderRead);
         if (pipelines_->valid(PipelineId::LightCull)) {
@@ -1532,6 +1711,9 @@ void RendererImpl::build_graph(const RenderScene& scene, const RenderTarget& tar
     g.compile();
     if (shadow.valid()) {
         shadow_map_.state = g.final_state(shadow);
+    }
+    if (spot_shadow.valid()) {
+        spot_shadow_map_.state = g.final_state(spot_shadow);
     }
 }
 

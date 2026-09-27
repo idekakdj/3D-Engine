@@ -95,14 +95,15 @@ struct SceneBuilder {
         scene::set_local_rotation(w, e, yaw_pitch(yaw, pitch));
     }
 
-    void light(LightKind kind, Vec3 color, f32 intensity, Vec3 pos, Quat rot = Quat(1, 0, 0, 0), f32 range = 10.0f) {
+    void light(LightKind kind, Vec3 color, f32 intensity, Vec3 pos, Quat rot = Quat(1, 0, 0, 0), f32 range = 10.0f,
+               bool shadows = false) {
         const Entity   e = w.create("Light");
         LightComponent l;
         l.kind         = kind;
         l.color        = color;
         l.intensity    = intensity;
         l.range        = range;
-        l.cast_shadows = kind == LightKind::Directional;
+        l.cast_shadows = kind == LightKind::Directional || shadows;
         w.add<LightComponent>(e, l);
         scene::set_local_position(w, e, pos);
         scene::set_local_rotation(w, e, rot);
@@ -218,6 +219,21 @@ const std::vector<GoldenCase>& cases() {
           [](CaseContext& c) {
               c.b.pbr_spheres();
               c.settings.debug_view = renderer::DebugView::Roughness;
+          } },
+        { "spot_shadows", "two shadow-casting spot lights over cubes and a sphere (ADR-0012)", false,
+          [](CaseContext& c) {
+              flat_environment(c, Vec3(0.01f));
+              const AssetId floor = c.b.material("floor", Vec3(0.75f), 0.0f, 0.8f);
+              const AssetId grey  = c.b.material("grey", Vec3(0.6f), 0.0f, 0.5f);
+              c.b.mesh("Floor", BuiltinMesh::Plane, floor, Vec3(0.0f));
+              c.b.mesh("Pillar", BuiltinMesh::Cube, grey, Vec3(-1.2f, 1.0f, 0.0f), Vec3(0.6f, 2.0f, 0.6f));
+              c.b.mesh("Box", BuiltinMesh::Cube, grey, Vec3(1.3f, 0.4f, 0.6f), Vec3(0.8f), yaw_pitch(35.0f, 0.0f));
+              c.b.mesh("Ball", BuiltinMesh::Sphere, grey, Vec3(0.2f, 0.5f, -1.4f));
+              c.b.light(LightKind::Spot, Vec3(1.0f, 0.95f, 0.85f), 60.0f, Vec3(-3.0f, 4.5f, 2.5f),
+                        glm::quatLookAt(glm::normalize(Vec3(0.55f, -0.75f, -0.4f)), Vec3(0, 1, 0)), 14.0f, true);
+              c.b.light(LightKind::Spot, Vec3(0.4f, 0.6f, 1.0f), 40.0f, Vec3(3.5f, 3.5f, -1.0f),
+                        glm::quatLookAt(glm::normalize(Vec3(-0.7f, -0.7f, 0.1f)), Vec3(0, 1, 0)), 12.0f, true);
+              c.b.camera(Vec3(0.0f, 5.5f, 8.0f), 0.0f, -32.0f);
           } },
         { "shadows", "cascaded sun shadows from a column of cubes", true,
           [](CaseContext& c) {

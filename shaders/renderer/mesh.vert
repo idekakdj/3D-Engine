@@ -56,6 +56,9 @@ void main() {
     v_uv = in_uv;
     v_instance = uint(gl_InstanceIndex);
 
-    mat4 view_proj = pc.view_index == 0u ? frame.view_proj : frame.cascade_view_proj[pc.view_index - 1u];
+    // 0 = camera, 1 + i = shadow cascade i, 1 + AE_MAX_CASCADES + j = spot shadow j (ADR-0012).
+    mat4 view_proj = pc.view_index == 0u                          ? frame.view_proj
+                     : pc.view_index <= uint(AE_MAX_CASCADES)     ? frame.cascade_view_proj[pc.view_index - 1u]
+                                                                  : frame.spot_shadows.items[pc.view_index - 1u - uint(AE_MAX_CASCADES)].view_proj;
     gl_Position = view_proj * world;
 }

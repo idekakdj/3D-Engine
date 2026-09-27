@@ -62,4 +62,53 @@ float ae_cascaded_shadow(FrameData frame, vec3 world_pos, vec3 geom_normal, vec3
     return mix(s, 1.0, fade);
 }
 
+// ---- spot-light shadows (ADR-0012) ----------------------------------------------------------
+// The spot shadow array is sampled WITHOUT a compare sampler: textureGather fetches the 2x2 depth
+// quad and the reverse-Z comparison (lit = receiver depth >= occluder depth) and bilinear weights
+// are applied here. Same result as hardware PCF, and it avoids the depth-compare path that Mesa
+// llvmpipe cannot sample (ADR-0004), so spot shadows also work on software rasterisers.
+float ae_spot_pcf_tap(uint map, uint layer, vec2 uv, vec2 size, float ref) {
+    vec2  st = uv * size - 0.5;
+    vec2  f = fract(st);
+    vec2  guv = (floor(st) + 1.0) / size; // centre of the 2x2 quad
+    vec4  d = textureGather(AE_TEX2DARRAY(map), vec3(guv, float(layer)), 0);
+    // Gather order: x = (0,1), y = (1,1), z = (1,0), w = (0,0).
+    vec4  lit = step(d, vec4(ref));
+    return mix(mix(lit.w, lit.z, f.x), mix(lit.x, lit.y, f.x), f.y);
+}
+
+// Spot shadow term for GpuSpotShadow `index`: 3x3 bilinear taps (tent weights) with a
+// normal-offset bias of ~1.5 shadow texels at the receiver's distance from the light.
+float ae_spot_shadow(FrameData frame, uint index, vec3 world_pos, vec3 geom_normal, vec3 L, float dist) {
+    if (index >= frame.spot_shadow_count || frame.spot_shadow_map == AE_INVALID_INDEX) {
+        return 1.0;
+    }
+    GpuSpotShadow sh = frame.spot_shadows.items[index];
+    float NoL = clamp(dot(geom_normal, L), 0.0, 1.0);
+    float texel_world = sh.texel_scale * dist;
+    vec3  p = world_pos + geom_normal * texel_world * (1.5 - 0.75 * NoL);
+    vec4  clip = sh.view_proj * vec4(p, 1.0);
+    if (clip.w <= 1e-5) {
+        return 1.0;
+    }
+    vec3 ndc = clip.xyz / clip.w;
+    vec2 uv = ndc.xy * 0.5 + 0.5;
+    if (any(lessThan(uv, vec2(0.0))) || any(greaterThan(uv, vec2(1.0)))) {
+        return 1.0; // outside the shadow frustum (very wide cones are capped)
+    }
+    float ref = clamp(ndc.z, 0.0, 1.0);
+    vec2  size = vec2(textureSize(AE_TEX2DARRAY(frame.spot_shadow_map), 0).xy);
+    vec2  texel = 1.0 / size;
+    float sum = 0.0;
+    float wsum = 0.0;
+    for (int y = -1; y <= 1; ++y) {
+        for (int x = -1; x <= 1; ++x) {
+            float w = (x == 0 ? 2.0 : 1.0) * (y == 0 ? 2.0 : 1.0);
+            sum += w * ae_spot_pcf_tap(frame.spot_shadow_map, sh.layer, uv + vec2(x, y) * texel, size, ref);
+            wsum += w;
+        }
+    }
+    return sum / wsum;
+}
+
 #endif

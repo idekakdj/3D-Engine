@@ -33,7 +33,10 @@ void main() {
 
     SetMeshOutputsEXT(ml.vertex_count, ml.triangle_count);
 
-    mat4 view_proj = pc.view_index == 0u ? frame.view_proj : frame.cascade_view_proj[pc.view_index - 1u];
+    // 0 = camera, 1 + i = shadow cascade i, 1 + AE_MAX_CASCADES + j = spot shadow j (ADR-0012).
+    mat4 view_proj = pc.view_index == 0u                          ? frame.view_proj
+                     : pc.view_index <= uint(AE_MAX_CASCADES)     ? frame.cascade_view_proj[pc.view_index - 1u]
+                                                                  : frame.spot_shadows.items[pc.view_index - 1u - uint(AE_MAX_CASCADES)].view_proj;
     mat3 normal_matrix = mat3(inst.normal_col0.xyz, inst.normal_col1.xyz, inst.normal_col2.xyz);
     for (uint v = gl_LocalInvocationID.x; v < ml.vertex_count; v += AE_MESHLET_MAX_VERTICES) {
         uint      vi = uint(c.vertex_offset) + c.meshlet_words.words[ml.vertex_offset + v];

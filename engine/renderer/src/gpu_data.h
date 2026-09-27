@@ -26,6 +26,7 @@ inline constexpr u32 kClusterZ = 24;
 inline constexpr u32 kClusterCount = kClusterX * kClusterY * kClusterZ;
 inline constexpr u32 kMaxLightsPerCluster = 128;
 inline constexpr u32 kMaxCascades = 4;
+inline constexpr u32 kMaxSpotShadows = 8; // ADR-0012: shadow-casting spot lights per frame
 inline constexpr u32 kMaxLights = 4096;       // uploaded per frame (extra lights are dropped)
 inline constexpr u32 kGpuInvalidIndex = 0xFFFF'FFFFu;
 
@@ -93,7 +94,7 @@ struct GpuLight {
     Vec3 color{ 0.0f };     // 32 color * intensity
     f32  spot_scale = 0.0f; // 44 1 / (cos_inner - cos_outer)
     f32  spot_offset = 0.0f;// 48 -cos_outer * spot_scale
-    u32  shadow = kGpuInvalidIndex; // 52 0 = uses the cascaded shadow map
+    u32  shadow = kGpuInvalidIndex; // 52 directional: 0 = the cascaded shadow map; spot: GpuSpotShadow index
     u32  pad0 = 0;
     u32  pad1 = 0;
 };
@@ -162,6 +163,9 @@ struct GpuFrame {
     f32  shadow_normal_bias = 0.0f;          // 1000 in shadow texels
     f32  cascade_blend = 0.1f;               // 1004 fraction of a cascade used to blend
     u64  user_ids = 0;                       // 1008 UserIdBuffer: RenderMeshInstance::user_id (pick frames)
+    u64  spot_shadows = 0;                   // 1016 SpotShadowBuffer (ADR-0012)
+    u32  spot_shadow_map = kGpuInvalidIndex; // 1024 sampler2DArray (depth, point clamp)
+    u32  spot_shadow_count = 0;              // 1028
 };
 static_assert(offsetof(GpuFrame, view) == 48);
 static_assert(offsetof(GpuFrame, cascade_view_proj) == 560);
@@ -174,7 +178,19 @@ static_assert(offsetof(GpuFrame, skybox_map) == 944);
 static_assert(offsetof(GpuFrame, cluster_x) == 960);
 static_assert(offsetof(GpuFrame, shadow_distance) == 992);
 static_assert(offsetof(GpuFrame, user_ids) == 1008);
-static_assert(sizeof(GpuFrame) == 1016);
+static_assert(offsetof(GpuFrame, spot_shadows) == 1016);
+static_assert(offsetof(GpuFrame, spot_shadow_count) == 1028);
+static_assert(sizeof(GpuFrame) == 1032);
+
+// Spot-light shadow (ADR-0012). GpuLight::shadow of a spot light = its index in this array.
+struct GpuSpotShadow {
+    Mat4 view_proj{ 1.0f };  // 0  reverse-Z perspective from the light
+    f32  texel_scale = 0.0f; // 64 world texel size per metre from the light (2 tan(fov/2) / size)
+    u32  layer = 0;          // 68
+    f32  pad0 = 0.0f;
+    f32  pad1 = 0.0f;
+};
+static_assert(sizeof(GpuSpotShadow) == 80);
 
 // ---------------------------------------------------------------------------
 // GPU-driven culling + picking (ADR-0009). GLSL side: shaders/renderer/cull_data.glsl.

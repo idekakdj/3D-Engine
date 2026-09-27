@@ -116,6 +116,13 @@ struct RendererSettings {
     bool      gpu_culling = true;
     bool      occlusion_culling = true;
     DebugView debug_view = DebugView::None;
+    // ADR-0012 (additive): shadows for spot lights with cast_shadows (perspective shadow maps in one
+    // depth array, gathered + compared in-shader, so they also work where `shadows` - the cascaded
+    // sun shadows - is off for driver reasons). The nearest max_spot_shadows (<= 8) spots whose
+    // cone reaches the view get one.
+    bool      spot_shadows = true;
+    u32       spot_shadow_map_size = 1024;
+    u32       max_spot_shadows = 4;
     // ADR-0010 (additive): draw static meshes of the GPU-driven path as meshlets through task +
     // mesh shaders (per-meshlet frustum + backface-cone culling). Needs gpu_culling and
     // DeviceFeatures::mesh_shaders; otherwise the indexed indirect path is used.
@@ -134,6 +141,8 @@ struct RendererStats {
     u32 instances_gpu_occlusion_culled = 0;
     // ADR-0010: GPU-driven candidates drawn as meshlets this frame (0 when mesh shading is off).
     u32 meshlet_instances = 0;
+    // ADR-0012: spot shadow maps rendered this frame.
+    u32 spot_shadow_maps = 0;
 };
 
 struct RendererDesc {
