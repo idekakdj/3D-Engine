@@ -82,7 +82,8 @@ without references the cases report *skipped*. A mismatch writes `<case>.actual.
 build/bin/sandbox --frames 60
 ```
 
-Editor controls: hold RMB + WASD/QE to fly, mouse wheel to dolly, LMB to select, W/E/R for the
+Editor: the asset browser shows thumbnails (grid / list; `--browse <folder>` opens it in a content
+folder); *View > Reset Layout* restores the default panels. Controls: hold RMB + WASD/QE to fly, mouse wheel to dolly, LMB to select, W/E/R for the
 move/rotate/scale gizmo, F to focus, Ctrl+Z/Y undo/redo, Ctrl+D duplicate, Del delete, Ctrl+S save,
 Ctrl+P play/stop.
 

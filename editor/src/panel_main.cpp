@@ -18,15 +18,17 @@ namespace aether::editor {
 
 void EditorApp::draw_dockspace() {
     const ImGuiID dock_id = ImGui::DockSpaceOverViewport(ImGui::GetID("EditorDockSpace"), ImGui::GetMainViewport());
-    if (dock_built_) {
+    if (dock_built_ && !reset_layout_) {
         return;
     }
     dock_built_ = true;
-    // Default layout on first use (an imgui.ini layout, if any, has already been applied).
+    // Default layout on first use (an imgui.ini layout, if any, has already been applied) or on
+    // View > Reset Layout.
     ImGuiDockNode* node = ImGui::DockBuilderGetNode(dock_id);
-    if (node != nullptr && node->IsSplitNode()) {
+    if (node != nullptr && node->IsSplitNode() && !reset_layout_) {
         return;
     }
+    reset_layout_ = false;
     ImGui::DockBuilderRemoveNode(dock_id);
     ImGui::DockBuilderAddNode(dock_id, ImGuiDockNodeFlags_DockSpace);
     ImGui::DockBuilderSetNodeSize(dock_id, ImGui::GetMainViewport()->WorkSize);
@@ -36,6 +38,10 @@ void EditorApp::draw_dockspace() {
     ImGuiID bottom = ImGui::DockBuilderSplitNode(center, ImGuiDir_Down, 0.28f, nullptr, &center);
     ImGuiID top    = ImGui::DockBuilderSplitNode(center, ImGuiDir_Up, 0.06f, nullptr, &center);
     ImGuiID right_bottom = ImGui::DockBuilderSplitNode(right, ImGuiDir_Down, 0.35f, nullptr, &right);
+    // Room for two toolbar rows (the play controls wrap below the snap controls when narrow).
+    const ImGuiStyle& st = ImGui::GetStyle();
+    const f32 toolbar_h  = 2.0f * ImGui::GetFrameHeightWithSpacing() + 2.0f * st.WindowPadding.y;
+    ImGui::DockBuilderSetNodeSize(top, ImVec2(ImGui::GetMainViewport()->WorkSize.x, toolbar_h));
     ImGui::DockBuilderDockWindow("Toolbar", top);
     ImGui::DockBuilderDockWindow("Viewport", center);
     ImGui::DockBuilderDockWindow("Hierarchy", left);
@@ -148,6 +154,10 @@ void EditorApp::draw_menu_bar() {
         ImGui::MenuItem("Animation", nullptr, &show_animation_);
         ImGui::MenuItem("Console", nullptr, &show_console_);
         ImGui::MenuItem("Engine stats", nullptr, &show_stats_);
+        if (ImGui::MenuItem("Reset Layout")) {
+            reset_layout_ = true;
+            show_assets_ = show_material_ = show_animation_ = show_console_ = show_stats_ = true;
+        }
         ImGui::Separator();
         ImGui::MenuItem("Game camera in play mode", nullptr, &use_game_camera_);
         ImGui::SliderFloat("Editor FOV", &fov_y_deg_, 20.0f, 110.0f, "%.0f deg");
@@ -218,7 +228,15 @@ void EditorApp::draw_toolbar() {
 
     // Play controls, centred.
     const f32 controls_width = 230.0f;
-    ImGui::SameLine(std::max(ImGui::GetCursorPosX() + 20.0f, (ImGui::GetWindowWidth() - controls_width) * 0.5f));
+    // Never overlap the snap controls: GetCursorPosX() is already on the next line here, so measure
+    // the right edge of the last item instead.
+    const f32 after_snaps = ImGui::GetItemRectMax().x - ImGui::GetWindowPos().x + 20.0f;
+    const f32 centred     = (ImGui::GetWindowWidth() - controls_width) * 0.5f;
+    if (after_snaps + controls_width <= ImGui::GetWindowWidth()) {
+        ImGui::SameLine(std::max(after_snaps, centred));
+    } else { // too narrow: wrap to a second row, centred
+        ImGui::SetCursorPosX(std::max(ImGui::GetStyle().WindowPadding.x, centred));
+    }
     const bool editing = play_state_ == PlayState::Edit;
     if (editing) {
         if (ImGui::Button("  Play  ")) play();

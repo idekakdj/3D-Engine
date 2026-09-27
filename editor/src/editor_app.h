@@ -31,6 +31,7 @@
 
 #include <filesystem>
 #include <map>
+#include <memory>
 #include <optional>
 #include <span>
 #include <string>
@@ -42,9 +43,12 @@ class RenderResourceCache;
 
 namespace aether::editor {
 
+class ThumbnailCache;
+
 struct EditorOptions {
     bool        self_test = false; // run the scripted self-test and exit with its result
     std::string select;            // entity name to select (and focus) after startup
+    std::string browse;            // content-relative folder the asset browser opens in
 };
 
 enum class CreateKind : u8 {
@@ -137,6 +141,8 @@ public:
     void sync_materials();
     [[nodiscard]] assets::MaterialData material_data_for(const AssetId& id);
     [[nodiscard]] PlayState play_state() const noexcept { return play_state_; }
+    // Asset-browser thumbnails (null before on_init / after shutdown).
+    [[nodiscard]] ThumbnailCache* thumbnails() noexcept { return thumbnails_.get(); }
     [[nodiscard]] EditHistory& history() noexcept { return history_; }
 
     // Editor camera (world-space pose) and the matrices the viewport renders with.
@@ -254,11 +260,15 @@ private:
     bool show_material_  = true;
     bool show_animation_ = true;
     bool dock_built_     = false;
+    bool reset_layout_   = false; // View > Reset Layout: rebuild the default dock layout
     std::string rename_buffer_;
     u64         console_seen_ = 0;
     std::string console_filter_;
     bool        console_autoscroll_ = true;
     std::filesystem::path assets_dir_; // content-relative directory being browsed
+    std::unique_ptr<ThumbnailCache> thumbnails_;
+    bool                            assets_grid_ = true;   // grid of thumbnails, else a list
+    f32                             assets_tile_ = 88.0f;  // grid tile size (pixels)
 
     // file dialog
     enum class FileDialog : u8 { None = 0, Open, SaveAs, SavePrefab };

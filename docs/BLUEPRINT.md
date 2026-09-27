@@ -4,7 +4,7 @@
 > across rendering fidelity, editor/tooling, physics/animation, and scripting/gameplay.
 >
 > **Status:** Foundation phase (multi-session project). **Author:** Engine architect (orchestrator).
-> **Doc version:** 1.10 (ADR-0010 applied). Update this header on every material revision.
+> **Doc version:** 1.11 (ADR-0011 applied). Update this header on every material revision.
 
 ---
 
@@ -541,6 +541,7 @@ until it builds and its acceptance check passes.
 - **v1.8** — ADR-0008: M1 baseline verified on Windows/MSVC/Intel Arc (build, tests, validation-clean runs, first hardware shadows, Arc golden references, Windows packaging).
 - **v1.9** — ADR-0009: M2 scope, additive contracts, three-agent wave.
 - **v1.10** — ADR-0010: M2 wave verified on Linux; meshlet mesh-shader path (ADR-0009 graphics stretch 1).
+- **v1.11** — ADR-0011: asset-browser thumbnails (ADR-0009 editor stretch); toolbar / layout fixes.
 
 ---
 
@@ -978,3 +979,49 @@ no leaked resources and 0 VMA allocations. The ADR-0009 acceptance gate ("Arc go
 unchanged") therefore holds with mesh shading on.
 
 **Remaining:** spot-light shadows (ADR-0009 stretch 2) and editor thumbnails.
+
+---
+
+## ADR-0011 — Asset-browser thumbnails (2026-09-27)
+
+**Status:** accepted; ADR-0009 editor stretch goal. **Scope:** `editor/**` only (no contract changes).
+
+**Decision.** The asset browser shows a 128x128 thumbnail per asset, generated on demand and cached
+(`editor/src/thumbnail_cache.*`; GPU-free helpers in `editor/include/aether/editor/thumbnail.h`):
+- **Images** (`.png/.jpg/.tga/.bmp/.hdr`): decoded on the CPU with stb and area-downscaled with an
+  exact, alpha-weighted box filter (letterboxed to a square; nearest-neighbour when upscaling; HDR
+  tonemapped with a log-average exposure + Reinhard). Exact source colours, no renderer involved.
+- **Models, prefabs, scenes**: instantiated into a private scratch `World` (never the edited one) and
+  resolved through a private `RenderResourceCache`; once every mesh, material and texture is
+  resident, the camera is framed on the visible bounds (fixed 3/4 view, bounding-sphere fit) and a
+  **dedicated thumbnail Renderer** (created lazily, 128x128, TAA / bloom / GPU culling off so one
+  frame is final, shadows mirror the main renderer) draws it into the thumbnail texture. Models and
+  prefabs get a key + fill light when they carry none. At most one 3D thumbnail per frame, so the
+  second renderer keeps the once-per-device-frame contract (ADR-0002) and never touches the viewport
+  renderer's TAA / Hi-Z history. A job that is still waiting after 600 frames renders with what is
+  resident.
+- **Lifetime:** entries are keyed by content path, regenerated when the file's modification time
+  changes (checked once a second), and textures + ImGui descriptors are retired with a
+  frames-in-flight delay.
+- **UI:** grid view (default; tile size slider) or list view (small icons, large preview in the
+  tooltip). Double-click, drag-and-drop into the viewport / hierarchy and a right-click menu work in
+  both. `aether-editor --browse <folder>` opens the browser in a content folder.
+
+**Fixes made alongside.** The toolbar's play controls were drawn over the grid / snap controls
+(`GetCursorPosX()` is already on the next line after `SameLine` chains); they now start after the
+last item or wrap to a second, centred row, and the default layout reserves two toolbar rows.
+New *View > Reset Layout* rebuilds the default docking (a stale `imgui.ini` could leave newer
+panels floating).
+
+**Verification (Linux / llvmpipe).** `test.editor` +7 cases (kinds, exact area averaging, no colour
+bleed from transparent texels, aspect-fit letterboxing, nearest upscaling, HDR tonemap, every
+bounds corner on screen after framing). `aether-editor --self-test` step 21-22: thumbnails of
+`props.gltf` (BC7 textures + normal maps), `cube.gltf`, a PNG, `showcase.aescene` and the test's
+prefab all become ready, are read back from the GPU and contain real images (full coverage, luminance
+stddev 27-58); touching the prefab regenerates its thumbnail. Images reviewed by eye; the editor
+screenshot shows the grid and the fixed toolbar. Validation clean; ctest 24/24 + shadows skipped.
+Not yet checked on the Arc.
+
+**Not done:** material thumbnails (materials live inside glTF files; the editor's material
+instances are not rendered by the thumbnail renderer and show the default material), animated
+previews, and an on-disk thumbnail cache (thumbnails are regenerated per session).

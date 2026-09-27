@@ -1,5 +1,6 @@
 // editor_app.cpp — EditorApp lifecycle, viewport rendering, editor camera and actions.
 #include "editor_app.h"
+#include "thumbnail_cache.h"
 
 #include "aether/assets/asset_manager.h"
 #include "aether/core/input.h"
@@ -57,7 +58,7 @@ EditorApp::EditorApp(gameplay::AppDesc desc, EditorOptions options)
     fly_.move_speed          = 8.0f;
 }
 
-EditorApp::~EditorApp() = default;
+EditorApp::~EditorApp() = default; // ThumbnailCache is complete here (unique_ptr)
 
 // =================================================================================================
 // lifecycle
@@ -71,6 +72,8 @@ Result<void> EditorApp::on_init() {
     rhi::SamplerDesc sd;
     sd.address_u = sd.address_v = sd.address_w = rhi::AddressMode::ClampToEdge;
     viewport_sampler_ = device().create_sampler(sd);
+    thumbnails_ = std::make_unique<ThumbnailCache>(device(), assets(), content_root(), viewport_sampler_,
+                                                   renderer().settings().shadows);
 
     if (world().entity_count() == 0) {
         new_scene();
@@ -91,6 +94,14 @@ Result<void> EditorApp::on_init() {
             AE_LOG_WARN("Editor", "--select: no entity named '{}'", options_.select);
         }
     }
+    if (!options_.browse.empty()) {
+        std::error_code ec;
+        if (std::filesystem::is_directory(content_root() / options_.browse, ec)) {
+            assets_dir_ = std::filesystem::path(options_.browse).lexically_normal();
+        } else {
+            AE_LOG_WARN("Editor", "--browse: no content folder '{}'", options_.browse);
+        }
+    }
     AE_LOG_INFO("Editor", "ready (content root {})", content_root().generic_string());
     return {};
 }
@@ -103,6 +114,10 @@ void EditorApp::on_shutdown() {
         }
     }
     device().wait_idle();
+    if (thumbnails_) {
+        thumbnails_->shutdown();
+        thumbnails_.reset();
+    }
     retire_viewport_targets(true);
     if (viewport_sampler_.is_valid()) {
         device().destroy(viewport_sampler_);
@@ -117,6 +132,9 @@ void EditorApp::on_update(const FrameTime& time) {
     update_editor_camera(std::min(time.unscaled_delta, 0.1f));
     apply_camera_override();
     retire_viewport_targets(false);
+    if (thumbnails_) {
+        thumbnails_->update(time.frame_index);
+    }
     poll_gpu_pick();
     sync_materials();
 }
@@ -200,6 +218,9 @@ void EditorApp::on_render_frame(rhi::FrameInfo& frame, renderer::RenderScene& sc
         target.initial_state = rhi::ResourceState::Undefined;
         target.final_state   = rhi::ResourceState::ShaderRead; // sampled by ImGui below
         renderer().render(scene, *frame.cmd, target);
+    }
+    if (thumbnails_) {
+        thumbnails_->render(*frame.cmd); // at most one asset thumbnail per frame (own renderer)
     }
     render_imgui_overlay(frame, /*clear_first=*/true);
 }

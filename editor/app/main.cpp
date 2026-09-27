@@ -1,6 +1,8 @@
 // aether-editor — entry point.
 //
-// Usage: aether-editor [--scene <file.aescene>] [--select <entity name>] [--self-test] [shared app flags]
+// Usage: aether-editor [--scene <file.aescene>] [--select <entity name>] [--browse <content dir>]
+//                      [--self-test] [shared app flags]
+//   --browse     open the asset browser in this content-relative folder (e.g. samples/props)
 //   --self-test  run the scripted editor workflow (self_test.cpp) and exit with its result.
 #include "aether/core/log.h"
 #include "editor_app.h"
@@ -21,6 +23,8 @@ int main(int argc, char** argv) {
             options.self_test = true;
         } else if (std::strcmp(argv[i], "--select") == 0 && i + 1 < argc) {
             options.select = argv[++i];
+        } else if (std::strcmp(argv[i], "--browse") == 0 && i + 1 < argc) {
+            options.browse = argv[++i];
         }
     }
 

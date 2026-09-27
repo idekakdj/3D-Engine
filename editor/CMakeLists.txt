@@ -18,6 +18,8 @@ aether_add_module(editor
         src/prefab.cpp
         src/material_instance.cpp
         src/anim_view.cpp
+        src/thumbnail.cpp
+        src/thumbnail_cache.cpp
         src/editor_app.cpp
         src/editor_actions.cpp
         src/panel_main.cpp
@@ -39,7 +41,8 @@ aether_add_module(editor
         aether::rhi
         imgui
         aether_imguizmo
-        nlohmann_json::nlohmann_json)
+        nlohmann_json::nlohmann_json
+        aether_stb) # thumbnail image decoding (stb_image's implementation is in aether.assets)
 
 add_executable(aether-editor app/main.cpp)
 target_link_libraries(aether-editor PRIVATE aether::editor)
@@ -57,7 +60,8 @@ aether_add_test(editor
     tests/test_snapping.cpp
     tests/test_prefab.cpp
     tests/test_material_instance.cpp
-    tests/test_anim_view.cpp)
+    tests/test_anim_view.cpp
+    tests/test_thumbnail.cpp)
 if(TARGET test.editor)
     target_link_libraries(test.editor PRIVATE aether::animation aether::physics)
 endif()

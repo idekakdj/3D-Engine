@@ -3,9 +3,11 @@
 // instantiate a model, attach a script; M2: multi-select + group transform + undo, snapping,
 // multi-edit, selection duplicate/delete/reparent, prefab create/instantiate/revert, asset
 // drag-and-drop, material instance edit + undo, async GPU picking with CPU fallback, animation
-// view) with the real UI running, then exits 0 on success.
+// view; thumbnails of images / models / prefabs / scenes) with the real UI running, then exits 0 on
+// success.
 // Used for headless verification (Xvfb + llvmpipe) and CI.
 #include "editor_app.h"
+#include "thumbnail_cache.h"
 
 #include "aether/animation/components.h"
 #include "aether/editor/anim_view.h"
@@ -17,6 +19,7 @@
 #include "aether/gameplay/render_bridge.h"
 #include "aether/physics/components.h"
 #include "aether/renderer/renderer.h"
+#include "aether/rhi/device_ext.h"
 #include "aether/scene/components.h"
 #include "aether/scene/hierarchy_utils.h"
 #include "aether/scene/id.h"
@@ -25,8 +28,11 @@
 #include "aether/scripting/components.h"
 #include "aether/scripting/scripting_subsystem.h"
 
+#include <chrono>
 #include <cmath>
+#include <cstdlib>
 #include <format>
+#include <fstream>
 
 namespace aether::editor {
 
@@ -438,7 +444,84 @@ void EditorApp::self_test_tick() {
         next();
         break;
     }
-    case 21: { // final checks
+    case 21: { // asset-browser thumbnails: CPU images + rendered models / prefab / scene
+        ThumbnailCache* tc = thumbnails();
+        check(tc != nullptr, "thumbnail cache exists");
+        if (tc == nullptr) {
+            next();
+            break;
+        }
+        const std::filesystem::path files[] = { "samples/props/props.gltf", "samples/cube/cube.gltf",
+                                                "samples/props/textures/panel_albedo.png", "scenes/showcase.aescene",
+                                                self_test_dir_ / "pair.aeprefab" };
+        bool done = true;
+        for (const auto& f : files) {
+            (void)tc->get(f);
+            done = done && tc->state(f) != ThumbnailCache::State::Pending;
+        }
+        if (!done && self_test_frame_ < 1200) {
+            return;
+        }
+        for (const auto& f : files) {
+            const ThumbnailCache::State st = tc->state(f);
+            check(st == ThumbnailCache::State::Ready, std::format("thumbnail of {} is ready (state {})", f.generic_string(), int(st)));
+            if (st != ThumbnailCache::State::Ready) {
+                continue;
+            }
+            auto rb = rhi::read_texture_rgba8(device(), tc->texture(f), rhi::ResourceState::ShaderRead);
+            check(rb.has_value(), "thumbnail readback");
+            if (!rb) {
+                continue;
+            }
+            // A real picture: visible coverage and spatial variation (not a flat colour).
+            f64 sum = 0.0, sum2 = 0.0;
+            u64 covered = 0;
+            const u64 n = u64(rb->width) * rb->height;
+            for (u64 i = 0; i < n; ++i) {
+                const u8* p = &rb->rgba8[i * 4];
+                const f64 l = 0.2126 * p[0] + 0.7152 * p[1] + 0.0722 * p[2];
+                sum += l;
+                sum2 += l * l;
+                covered += p[3] > 0 ? 1u : 0u;
+            }
+            const f64 mean = sum / f64(n);
+            const f64 stddev = std::sqrt(std::max(0.0, sum2 / f64(n) - mean * mean));
+            AE_LOG_INFO("SelfTest", "thumbnail {}: {}x{}, mean {:.1f}, stddev {:.1f}, coverage {:.0f}%", f.generic_string(),
+                        rb->width, rb->height, mean, stddev, 100.0 * f64(covered) / f64(n));
+            check(rb->width == ThumbnailCache::kSize && rb->height == ThumbnailCache::kSize, "thumbnail size");
+            check(covered > n / 4, std::format("thumbnail {} has visible content", f.generic_string()));
+            check(stddev > 4.0, std::format("thumbnail {} is not a flat colour (stddev {:.1f})", f.generic_string(), stddev));
+            if (const char* dump = std::getenv("AE_THUMBNAIL_DUMP")) { // manual review: binary PPM
+                std::filesystem::create_directories(dump);
+                std::ofstream out(std::filesystem::path(dump) / (f.stem().string() + ".ppm"), std::ios::binary);
+                out << "P6\n" << rb->width << " " << rb->height << "\n255\n";
+                for (u64 i = 0; i < n; ++i) {
+                    out.write(reinterpret_cast<const char*>(&rb->rgba8[i * 4]), 3);
+                }
+            }
+        }
+        const ThumbnailCache::Stats ts = tc->stats();
+        check(ts.rendered >= 4 && ts.decoded >= 1, std::format("{} rendered + {} decoded thumbnails", ts.rendered, ts.decoded));
+        // A file edit regenerates the thumbnail (mtime check).
+        std::filesystem::last_write_time(self_test_dir_ / "pair.aeprefab",
+                                         std::filesystem::file_time_type::clock::now() + std::chrono::seconds(2));
+        self_test_value_ = static_cast<f32>(ts.rendered);
+        next();
+        break;
+    }
+    case 22: {
+        ThumbnailCache* tc = thumbnails();
+        const std::filesystem::path prefab = self_test_dir_ / "pair.aeprefab";
+        (void)tc->get(prefab);
+        if (tc->stats().rendered <= static_cast<u32>(self_test_value_) && self_test_frame_ < 600) {
+            return;
+        }
+        check(tc->stats().rendered > static_cast<u32>(self_test_value_) && tc->state(prefab) == ThumbnailCache::State::Ready,
+              "an edited file's thumbnail is regenerated");
+        next();
+        break;
+    }
+    case 23: { // final checks
         auto* bridge = find_subsystem<gameplay::RenderBridgeSubsystem>();
         check(bridge != nullptr && bridge->last_stats().instances >= 2, "the viewport renders the scene");
         check(viewport_.texture.is_valid(), "viewport render target exists");
