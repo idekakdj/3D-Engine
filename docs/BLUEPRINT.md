@@ -971,6 +971,10 @@ mesh shaders), mock-device path (mesh-task draws with stride 20, picking, fallba
 Validation clean in all app checks; the slice renders meshlet statics next to a vertex-path skinned
 character.
 
-**Open (needs the Arc):** `ctest -L golden` on the Intel Arc must pass unchanged with meshlets on (the
-Arc exposes mesh shaders); if a case differs, compare with `--no-mesh-shading` before re-recording.
-Spot-light shadows (ADR-0009 stretch 2) and editor thumbnails remain.
+**Verified on the Intel Arc (2026-09-27, driver 101.8991, Vulkan 1.4.356, validation ON).** All 9
+golden cases, `shadows` included, run with the meshlet path active ("static meshes as meshlets" in the
+log) and match the Arc references **bit-identically** (max diff 0, PSNR inf). Every run shut down with
+no leaked resources and 0 VMA allocations. The ADR-0009 acceptance gate ("Arc golden cases pass
+unchanged") therefore holds with mesh shading on.
+
+**Remaining:** spot-light shadows (ADR-0009 stretch 2) and editor thumbnails.
