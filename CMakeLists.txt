@@ -94,4 +94,11 @@ foreach(app IN ITEMS editor runtime samples)
     endif()
 endforeach()
 
+# Golden-image render tests (tests/golden) — part of AE_MODULES as "golden".
+ae_module_enabled(golden "tests/golden" _enabled)
+if(_enabled)
+    add_subdirectory("tests/golden")
+    message(STATUS "Aether: + tests/golden")
+endif()
+
 message(STATUS "Aether ${PROJECT_VERSION} configured (build type: ${CMAKE_BUILD_TYPE}, modules: ${AE_MODULES})")

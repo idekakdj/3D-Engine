@@ -261,6 +261,12 @@ void VulkanDevice::unmap(BufferHandle handle) {
     }
 }
 
+void VulkanDevice::invalidate_host(BufferHandle handle) {
+    if (BufferRecord* b = buffers_.get(handle); b && b->mapped) {
+        VK_CHECK(vmaInvalidateAllocation(allocator_, b->allocation, 0, VK_WHOLE_SIZE));
+    }
+}
+
 bool VulkanDevice::format_supports_blit(VkFormat format, bool& linear) const {
     VkFormatProperties props{};
     vkGetPhysicalDeviceFormatProperties(gpu_, format, &props);

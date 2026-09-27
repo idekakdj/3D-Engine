@@ -190,6 +190,8 @@ public:
 
     // Runs `fn` once all GPU work that may reference current resources has completed.
     void defer(std::function<void()> fn);
+    // Makes GPU writes to a host-visible buffer visible to host reads (non-coherent memory).
+    void invalidate_host(BufferHandle h);
     // Called after each successful present (ImGui multi-viewport platform windows).
     void set_post_present_hook(std::function<void()> hook) { post_present_hook_ = std::move(hook); }
     void set_object_name(VkObjectType type, u64 handle, const std::string& name) const;

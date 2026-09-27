@@ -537,6 +537,7 @@ until it builds and its acceptance check passes.
 - **v1.4** — ADR-0004: Wave A closed (scripting, animation tests), gameplay implemented, M1 vertical slice, Linux/llvmpipe headless verification path.
 - **v1.5** — ADR-0005: the editor (Wave B complete).
 - **v1.6** — ADR-0006: the runtime player, project manifests and packaging; `AppDesc` cooked-asset fields.
+- **v1.7** — ADR-0007: golden-image render tests; `rhi::read_texture_rgba8` readback.
 
 ---
 
@@ -800,3 +801,40 @@ by a Runtime-mode load of the packaged data.
 **Not done yet:** archive/pak files (the package is a loose directory), shader precompilation into
 the package (shaders still compile at startup), a Windows packaging run, a launcher/splash screen and
 save-game support.
+
+---
+
+## ADR-0007 — Golden-image render tests
+
+**Status:** accepted. **Scope:** `tests/golden/` (`aether.golden`, `aether-golden`, `test.golden`),
+an additive RHI function, root `CMakeLists.txt` (the `golden` entry of `AE_MODULES`).
+
+**Contract change (additive, `rhi/device_ext.h`).** `read_texture_rgba8(Device&, TextureHandle,
+ResourceState)` copies mip 0 of an RGBA8/BGRA8 texture (needs `TextureUsage::TransferSrc`) to the CPU
+through `immediate_submit` and a GpuToCpu buffer (invalidated for non-coherent memory), returning the
+texture to its state. It is the screenshot / readback primitive; `CommandList` stays frozen.
+
+**Harness.** One process per case (`aether-golden --case <name>`), so a case's image never depends on
+which cases ran before it (TAA history, caches). The case builds its scene from built-in meshes and
+runtime materials, renders offscreen at 320x240 for 40 frames and compares the final display-encoded
+target with `tests/golden/reference/<device class>/<case>.png`. Nothing in the scenes depends on
+wall-clock time, so runs are deterministic: on llvmpipe repeated runs are bit-identical. Match rule:
+<= 0.2% of pixels beyond a per-channel tolerance of 4 and mean absolute error <= 0.75 (0..255).
+A mismatch writes the actual image and a diff (grey = amplified error, red = beyond tolerance).
+
+**References are per device class** (`llvmpipe`, `swiftshader`, else the sanitised adapter name):
+drivers legitimately differ, so a device without references reports ctest *skipped* (exit 77) instead
+of failing, and `--update` records them. The `shadows` case needs cascaded shadows and skips where the
+llvmpipe workaround disables them (ADR-0004), so its first reference must come from a real GPU.
+
+**Cases (M1 renderer features):** PBR metal/roughness sweep with sky IBL and the full post chain; the
+same without SSAO/bloom/TAA; punctual point + spot lights with flat ambient; emissive + bloom;
+alpha-blended translucency; the Normals / Albedo / Roughness debug views; shadows. ctest entries
+`golden.<case>` (labels `gpu;golden`) are registered with `-DAE_GOLDEN_TESTS=ON`.
+
+**Verification.** All eight llvmpipe references were reviewed visually before being committed; a
+deliberate 15% roughness change in `forward.frag` failed the four roughness-sensitive cases (the
+Normals/Albedo views correctly passed) with diffs localised to the specular lobes; validation clean.
+
+**Not done yet:** references for a real GPU (the Intel Arc dev box), CI wiring, and cases for
+skinning, debug lines, cluster light counts at scale and the other debug views.

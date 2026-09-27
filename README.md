@@ -27,6 +27,7 @@ relocatable game builds.
 | `runtime/` | `aether-player`: `.aeproject` manifests, packaging, the game player |
 | `samples/` | `sandbox` (RHI bring-up), `vertical_slice` (M1 demo) |
 | `content/` | sample models, scripts and scenes |
+| `tests/golden` | golden-image render tests (`aether-golden`) and their reference images |
 
 ## Building
 
@@ -63,6 +64,21 @@ Headless (no GPU, no display): start `Xvfb :99`, then run with `DISPLAY=:99`. Us
 build/bin/aether-editor --self-test          # scripted editor workflow, exit code = result
 build/bin/vertical_slice --frames 300 --check
 build/bin/aether-player --frames 120 --check
+```
+
+Golden-image render tests (configure with `-DAE_GOLDEN_TESTS=ON`; needs a Vulkan device and a display):
+
+```bash
+ctest --test-dir build -L golden                        # compare every case with its reference
+build/bin/aether-golden --list                          # the cases
+build/bin/aether-golden --case pbr_spheres --update     # re-record a reference (review the image!)
+```
+
+References live in `tests/golden/reference/<device class>/` (recorded on Mesa llvmpipe); on a device
+without references the cases report *skipped*. A mismatch writes `<case>.actual.png` and `<case>.diff.png`
+(red = pixels beyond tolerance) to `build/bin/golden_out/`.
+
+```bash
 build/bin/sandbox --frames 60
 ```
 
