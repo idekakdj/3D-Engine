@@ -1,8 +1,9 @@
 // pipelines.h — the renderer's pipeline table + runtime shader/pipeline library.
 //
 // Private header. build_pipeline_specs() is the single source of truth for every shader
-// permutation the renderer uses; the unit tests compile exactly this list. The
-// PipelineLibrary compiles GLSL at runtime (Device::compile_glsl_file), creates
+// permutation the renderer uses; the unit tests and the offline aether-shaderc tool compile
+// exactly this list. The PipelineLibrary loads SPIR-V from the shader cache (ADR-0014) or
+// compiles GLSL at runtime (Device::compile_glsl_file), creates
 // pipelines, hot-reloads them (keeping the old pipeline whenever a shader fails) and
 // creates per-output-format variants on demand (tonemap / debug lines write straight into
 // the caller's RenderTarget, whose format is only known at render()). A pipeline whose
@@ -96,6 +97,30 @@ inline constexpr u32 kPipelineTableSize = kPipelineCount + kMeshletPipelineCount
 // tree baked in at build time (AE_RENDERER_SHADER_SOURCE_DIR), else shader_dir().
 [[nodiscard]] std::filesystem::path resolve_shader_root();
 
+// ---- SPIR-V cache (ADR-0014) ----
+// A compiled module is stored as <spirv_cache_name()> in
+//   1. <shader root>/spirv/            read-only, baked at build time by aether-shaderc and shipped
+//                                      with the installed engine;
+//   2. <cache_dir()>/shaders/          the user cache, filled on a miss.
+// The name hashes the content of EVERY file under the shader root (except spirv/), the shader's
+// file / stage / defines and the debug-info flag, so any shader edit invalidates the cache and a
+// stale module can never be loaded. AE_SHADER_CACHE=0 disables the cache (always compile).
+inline constexpr const char* kShippedSpirvDir = "spirv";
+// FNV-1a 64 over the sorted relative paths + contents of every file under `root` (except spirv/).
+[[nodiscard]] u64 shader_tree_hash(const std::filesystem::path& root);
+// The exact options the library compiles `src` with (shared defines + src.defines, include root).
+[[nodiscard]] rhi::ShaderCompileOptions shader_compile_options(const ShaderSource& src,
+                                                               const std::filesystem::path& root);
+// "<16 hex digits>.spv" (independent of where the shader root lives).
+[[nodiscard]] std::string spirv_cache_name(u64 tree_hash, const ShaderSource& src,
+                                           const rhi::ShaderCompileOptions& options);
+// Every distinct shader of `specs` (by ShaderSource::key()), in table order.
+[[nodiscard]] std::vector<ShaderSource> unique_shader_sources(const std::vector<PipelineSpec>& specs);
+// Loads a SPIR-V module; empty unless the file holds a plausible module (magic, size).
+[[nodiscard]] std::vector<u32> read_spirv_file(const std::filesystem::path& file);
+// Writes via a temporary file + rename, so concurrent writers never leave a torn module.
+bool write_spirv_file(const std::filesystem::path& file, const std::vector<u32>& spirv);
+
 class PipelineLibrary {
 public:
     PipelineLibrary(rhi::Device& device, std::filesystem::path shader_root);
@@ -116,6 +141,18 @@ public:
     // Variant of a per_target_format pipeline for `color_format` (created lazily).
     [[nodiscard]] rhi::PipelineHandle get_for_format(PipelineId id, rhi::Format color_format);
     [[nodiscard]] bool valid(PipelineId id) const { return get(id).is_valid(); }
+
+    // ADR-0014 SPIR-V cache. The default user cache is <cache_dir()>/shaders; an empty path
+    // disables it (the shipped <root>/spirv is still read unless set_cache_enabled(false)).
+    void set_user_cache_dir(std::filesystem::path dir) { user_cache_ = std::move(dir); }
+    void set_cache_enabled(bool enabled) { cache_enabled_ = enabled; }
+    struct CacheStats {
+        u32 shipped = 0;  // modules loaded from <root>/spirv
+        u32 cached = 0;   // modules loaded from the user cache
+        u32 compiled = 0; // modules compiled from GLSL
+    };
+    // Counters of the last build() / reload().
+    [[nodiscard]] CacheStats cache_stats() const { return stats_; }
 
     void shutdown();
 
@@ -140,8 +177,15 @@ private:
                                rhi::ShaderHandle cs, rhi::Format color_override);
     void destroy_unreferenced_shaders();
 
+    // SPIR-V of `src` from the cache, or compiled (and stored in the user cache).
+    Result<std::vector<u32>> load_or_compile(const ShaderSource& src);
+
     rhi::Device&                   device_;
     std::filesystem::path          root_;
+    std::filesystem::path          user_cache_;
+    bool                           cache_enabled_ = true;
+    u64                            tree_hash_ = 0;
+    CacheStats                     stats_{};
     std::vector<Entry>             entries_;
     std::vector<rhi::ShaderHandle> modules_; // every live shader module
 };

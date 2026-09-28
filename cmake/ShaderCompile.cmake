@@ -1,10 +1,8 @@
 # Offline shader compilation helper.
 #
-# ADR-0001: the primary path for M0/M1 is RUNTIME compilation via the glslang C++
-# API (wrapped in aether.rhi), which gives hot-reload for free. This module is a
-# thin placeholder for a future offline/build-time SPIR-V bake step so shaders can
-# be precompiled for shipping builds. It is intentionally a no-op stub until the
-# renderer's shader-variant system lands (blueprint §7.4).
+# ADR-0001: GLSL is compiled at RUNTIME via the glslang C++ API (wrapped in aether.rhi),
+# which gives hot-reload for free. Shipping builds precompile the renderer's shaders with
+# aether-shaderc (ADR-0014, engine/renderer/CMakeLists.txt: target aether_shader_cache).
 #
 # aether_add_shader_dir(<target> <dir>) - reserved; currently records the shader
 # directory as a target property for tooling to discover.

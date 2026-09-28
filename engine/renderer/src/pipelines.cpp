@@ -5,9 +5,17 @@
 
 #include "aether/core/log.h"
 #include "aether/core/paths.h"
+#include "aether/core/paths_ext.h"
 
 #include <algorithm>
+#include <chrono>
+#include <cstdlib>
+#include <cstring>
 #include <format>
+#include <fstream>
+#include <iterator>
+#include <random>
+#include <string_view>
 #include <system_error>
 
 namespace aether::renderer {
@@ -15,6 +23,28 @@ namespace aether::renderer {
 namespace {
 constexpr const char* kLogCat = "Renderer";
 constexpr u32         kPushBytes = 128; // universal layout (ADR-0002)
+
+// Bumped when the cache format or the compiler setup changes in a way the key cannot see.
+constexpr u64 kSpirvCacheVersion = 1;
+constexpr u64 kFnvOffset = 0xcbf29ce484222325ull;
+constexpr u64 kFnvPrime = 0x100000001b3ull;
+
+void fnv(u64& h, const void* data, std::size_t size) {
+    const auto* p = static_cast<const unsigned char*>(data);
+    for (std::size_t i = 0; i < size; ++i) {
+        h ^= p[i];
+        h *= kFnvPrime;
+    }
+}
+void fnv_str(u64& h, std::string_view s) {
+    fnv(h, s.data(), s.size());
+    fnv(h, "", 1); // terminator: "ab"+"c" != "a"+"bc"
+}
+
+bool cache_env_enabled() {
+    const char* v = std::getenv("AE_SHADER_CACHE");
+    return v == nullptr || std::strcmp(v, "0") != 0;
+}
 
 rhi::ShaderDefine def(std::string name, std::string value = "1") {
     return rhi::ShaderDefine{ std::move(name), std::move(value) };
@@ -302,13 +332,164 @@ std::filesystem::path resolve_shader_root() {
     return root;
 }
 
+
+// ===========================================================================
+// SPIR-V cache (ADR-0014)
+// ===========================================================================
+u64 shader_tree_hash(const std::filesystem::path& root) {
+    namespace fs = std::filesystem;
+    std::error_code                                           ec;
+    std::vector<std::pair<std::string, fs::path>>             files;
+    for (fs::recursive_directory_iterator it(root, fs::directory_options::skip_permission_denied, ec), end;
+         !ec && it != end; it.increment(ec)) {
+        if (it->is_directory(ec)) {
+            if (it.depth() == 0 && it->path().filename() == kShippedSpirvDir) {
+                it.disable_recursion_pending();
+            }
+            continue;
+        }
+        if (it->is_regular_file(ec)) {
+            files.emplace_back(it->path().lexically_relative(root).generic_string(), it->path());
+        }
+    }
+    std::sort(files.begin(), files.end());
+    u64               h = kFnvOffset;
+    std::vector<char> bytes;
+    for (const auto& [rel, path] : files) {
+        fnv_str(h, rel);
+        std::ifstream in(path, std::ios::binary);
+        bytes.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+        const u64 n = bytes.size();
+        fnv(h, &n, sizeof(n));
+        fnv(h, bytes.data(), bytes.size());
+    }
+    return h;
+}
+
+rhi::ShaderCompileOptions shader_compile_options(const ShaderSource& src, const std::filesystem::path& root) {
+    rhi::ShaderCompileOptions opts;
+    opts.defines = shared_shader_defines();
+    opts.defines.insert(opts.defines.end(), src.defines.begin(), src.defines.end());
+    opts.include_dirs = { root.string() };
+#ifndef NDEBUG
+    opts.debug_info = true;
+#endif
+    return opts;
+}
+
+std::string spirv_cache_name(u64 tree_hash, const ShaderSource& src, const rhi::ShaderCompileOptions& options) {
+    u64 h = kFnvOffset;
+    fnv(h, &kSpirvCacheVersion, sizeof(kSpirvCacheVersion));
+    fnv(h, &tree_hash, sizeof(tree_hash));
+    fnv_str(h, src.file);
+    const u32 stage = static_cast<u32>(src.stage);
+    fnv(h, &stage, sizeof(stage));
+    // The include directories are absolute (build tree vs install folder) and deliberately not
+    // hashed: the tree hash already covers everything they can reach inside the root.
+    for (const rhi::ShaderDefine& d : options.defines) {
+        fnv_str(h, d.name);
+        fnv_str(h, d.value);
+    }
+    const u8 dbg = options.debug_info ? 1 : 0;
+    fnv(h, &dbg, 1);
+    return std::format("{:016x}.spv", h);
+}
+
+std::vector<ShaderSource> unique_shader_sources(const std::vector<PipelineSpec>& specs) {
+    std::vector<ShaderSource> out;
+    std::vector<std::string>  keys;
+    for (const PipelineSpec& s : specs) {
+        for (const ShaderSource* src : { &s.ts, &s.vs, &s.fs, &s.cs }) {
+            if (src->empty()) {
+                continue;
+            }
+            std::string k = src->key();
+            if (std::find(keys.begin(), keys.end(), k) == keys.end()) {
+                keys.push_back(std::move(k));
+                out.push_back(*src);
+            }
+        }
+    }
+    return out;
+}
+
+std::vector<u32> read_spirv_file(const std::filesystem::path& file) {
+    std::error_code ec;
+    const auto      size = std::filesystem::file_size(file, ec);
+    if (ec || size < 20 || size % 4 != 0 || size > (64u << 20)) {
+        return {};
+    }
+    std::vector<u32> words(size / 4);
+    std::ifstream    in(file, std::ios::binary);
+    if (!in.read(reinterpret_cast<char*>(words.data()), static_cast<std::streamsize>(size))) {
+        return {};
+    }
+    constexpr u32 kSpirvMagic = 0x07230203u;
+    if (words[0] != kSpirvMagic) {
+        return {};
+    }
+    return words;
+}
+
+bool write_spirv_file(const std::filesystem::path& file, const std::vector<u32>& spirv) {
+    std::error_code ec;
+    std::filesystem::create_directories(file.parent_path(), ec);
+    std::random_device          rd;
+    const std::filesystem::path tmp = file.parent_path() / std::format("{}.{:08x}.tmp", file.filename().string(), rd());
+    {
+        std::ofstream out(tmp, std::ios::binary | std::ios::trunc);
+        if (!out.write(reinterpret_cast<const char*>(spirv.data()),
+                       static_cast<std::streamsize>(spirv.size() * sizeof(u32)))) {
+            out.close();
+            std::filesystem::remove(tmp, ec);
+            return false;
+        }
+    }
+    std::filesystem::rename(tmp, file, ec);
+    if (ec) {
+        std::filesystem::remove(tmp, ec);
+        return false;
+    }
+    return true;
+}
+
 // ===========================================================================
 // PipelineLibrary
 // ===========================================================================
 PipelineLibrary::PipelineLibrary(rhi::Device& device, std::filesystem::path shader_root)
-    : device_(device), root_(std::move(shader_root)) {}
+    : device_(device), root_(std::move(shader_root)), cache_enabled_(cache_env_enabled()) {
+    if (!paths::cache_dir().empty()) {
+        user_cache_ = paths::cache_dir() / "shaders";
+    }
+}
 
 PipelineLibrary::~PipelineLibrary() { shutdown(); }
+
+Result<std::vector<u32>> PipelineLibrary::load_or_compile(const ShaderSource& src) {
+    const rhi::ShaderCompileOptions opts = shader_compile_options(src, root_);
+    std::string                     name;
+    if (cache_enabled_) {
+        name = spirv_cache_name(tree_hash_, src, opts);
+        if (std::vector<u32> w = read_spirv_file(root_ / kShippedSpirvDir / name); !w.empty()) {
+            ++stats_.shipped;
+            return w;
+        }
+        if (!user_cache_.empty()) {
+            if (std::vector<u32> w = read_spirv_file(user_cache_ / name); !w.empty()) {
+                ++stats_.cached;
+                return w;
+            }
+        }
+    }
+    auto spirv = device_.compile_glsl_file(src.stage, root_ / src.file, opts);
+    if (spirv) {
+        ++stats_.compiled;
+        if (cache_enabled_ && !user_cache_.empty() && !write_spirv_file(user_cache_ / name, spirv.value())) {
+            AE_LOG_WARN(kLogCat, "could not write the shader cache entry '{}'", (user_cache_ / name).string());
+        }
+    }
+    return spirv;
+}
 
 rhi::ShaderHandle PipelineLibrary::compile(const ShaderSource& src, std::vector<CompiledShader>& cache,
                                            std::string& errors) {
@@ -324,14 +505,7 @@ rhi::ShaderHandle PipelineLibrary::compile(const ShaderSource& src, std::vector<
     CompiledShader entry;
     entry.key = key;
 
-    rhi::ShaderCompileOptions opts;
-    opts.defines = shared_shader_defines();
-    opts.defines.insert(opts.defines.end(), src.defines.begin(), src.defines.end());
-    opts.include_dirs = { root_.string() };
-#ifndef NDEBUG
-    opts.debug_info = true;
-#endif
-    auto spirv = device_.compile_glsl_file(src.stage, root_ / src.file, opts);
+    auto spirv = load_or_compile(src);
     if (!spirv) {
         errors += std::format("{}: {}\n", key, spirv.error().message);
         AE_LOG_ERROR(kLogCat, "shader compile failed [{}]:\n{}", key, spirv.error().message);
@@ -387,6 +561,9 @@ rhi::PipelineHandle PipelineLibrary::create(const Entry& e, rhi::ShaderHandle ts
 
 u32 PipelineLibrary::build(std::vector<PipelineSpec> specs) {
     shutdown();
+    const auto t0 = std::chrono::steady_clock::now();
+    stats_ = {};
+    tree_hash_ = cache_enabled_ ? shader_tree_hash(root_) : 0;
     entries_.clear();
     entries_.reserve(specs.size());
     std::vector<CompiledShader> cache;
@@ -411,10 +588,15 @@ u32 PipelineLibrary::build(std::vector<PipelineSpec> specs) {
         entries_.push_back(std::move(e));
     }
     destroy_unreferenced_shaders();
+    const auto ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+    AE_LOG_INFO(kLogCat, "pipelines built in {:.0f} ms (shaders: {} precompiled, {} cached, {} compiled{})", ms,
+                stats_.shipped, stats_.cached, stats_.compiled, cache_enabled_ ? "" : ", cache off");
     return failures;
 }
 
 Result<void> PipelineLibrary::reload() {
+    stats_ = {};
+    tree_hash_ = cache_enabled_ ? shader_tree_hash(root_) : 0;
     std::vector<CompiledShader> cache;
     std::string                 errors;
     u32                         replaced = 0;

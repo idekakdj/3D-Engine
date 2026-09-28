@@ -9,7 +9,7 @@
   3. Copies the packages to <repo>/dist/.
   4. With -SmokeTest: unzips the ZIP to a temp folder and runs the INSTALLED editor self-test and
      player check against a temporary Documents folder, then verifies that nothing was written
-     into the install folder.
+     into the install folder and that the baked shader cache (shaders/spirv, ADR-0014) shipped.
 
 .EXAMPLE
   ./scripts/package.ps1                  # build + package
@@ -105,13 +105,15 @@ if ($SmokeTest) {
     $after = & $hash
     $unchanged = -not (Compare-Object $before $after)
     $project = Test-Path (Join-Path $docs "Aether Projects\Starter Project\Starter Project.aeproject")
+    $spirv = @(Get-ChildItem (Join-Path $app.FullName "shaders\spirv") -Filter *.spv -ErrorAction SilentlyContinue).Count
 
     Write-Host ""
     Write-Host ("[smoke] editor self-test : {0}" -f $(if ($editor -eq 0) { "PASSED" } else { "FAILED ($editor)" }))
     Write-Host ("[smoke] player check     : {0}" -f $(if ($player -eq 0) { "PASSED" } else { "FAILED ($player)" }))
     Write-Host ("[smoke] starter project  : {0}" -f $(if ($project) { "created in Documents" } else { "MISSING" }))
     Write-Host ("[smoke] install folder   : {0}" -f $(if ($unchanged) { "unchanged" } else { "MODIFIED (bug!)" }))
-    if ($editor -ne 0 -or $player -ne 0 -or -not $project -or -not $unchanged) {
+    Write-Host ("[smoke] baked shaders    : {0}" -f $(if ($spirv -gt 0) { "$spirv precompiled" } else { "MISSING" }))
+    if ($editor -ne 0 -or $player -ne 0 -or -not $project -or -not $unchanged -or $spirv -eq 0) {
         throw "Smoke test failed (files kept in $root)."
     }
     Remove-Item -Recurse -Force $root

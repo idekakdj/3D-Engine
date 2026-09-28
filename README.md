@@ -40,8 +40,10 @@ Aether is distributed as a normal desktop application:
 Requirements: Windows 10/11 x64 and a GPU driver with Vulkan 1.3 (current Intel, AMD and NVIDIA
 drivers). On first launch the editor creates your workspace in
 `Documents\Aether Projects\Starter Project` (starter content + your saved scenes and imported
-assets); the install folder is never written to. `aether-editor --project <file.aeproject>` opens
-another project. Nothing runs online.
+assets); the install folder is never written to. **File > New Project...** / **Open Project...**
+(or `aether-editor --projects`) creates and switches projects; recent projects are remembered, and
+`aether-editor --project <file.aeproject>` opens one directly. Shaders ship precompiled, so the
+editor starts without compiling GLSL. Nothing runs online.
 
 Making the packages (developers): `powershell -ExecutionPolicy Bypass -File scripts/package.ps1 -SmokeTest`
 builds Release, writes the ZIP (and the setup `.exe` when Inno Setup 6 is installed:

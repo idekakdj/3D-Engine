@@ -5,7 +5,8 @@
 #
 # Installed layout (the engine root is found as the executable's ancestor holding shaders/):
 #   bin/aether-editor(.exe), bin/aether-player(.exe)  (+ the MSVC runtime DLLs on Windows)
-#   shaders/                     compiled at startup (pipeline cache under the user's .aether/cache)
+#   shaders/                     GLSL sources (hot reload, user edits)
+#   shaders/spirv/               SPIR-V baked by aether-shaderc (ADR-0014): no GLSL compile at startup
 #   resources/                   icon + splash (ADR-0014)
 #   content/                     starter content, copied to Documents/Aether Projects on first run
 #   licenses/<component>/        third-party license texts
@@ -52,6 +53,12 @@ if(WIN32)
     endforeach()
 endif()
 install(DIRECTORY "${PROJECT_SOURCE_DIR}/shaders/" DESTINATION shaders COMPONENT ${AE_INSTALL_COMPONENT})
+if(TARGET aether_shader_cache) # ADR-0014: the apps always ship with a baked shader cache
+    foreach(_t ${_ae_apps})
+        add_dependencies(${_t} aether_shader_cache)
+    endforeach()
+    install(DIRECTORY "${AE_SHADER_SPIRV_DIR}/" DESTINATION shaders/spirv COMPONENT ${AE_INSTALL_COMPONENT})
+endif()
 install(DIRECTORY "${PROJECT_SOURCE_DIR}/resources/" DESTINATION resources COMPONENT ${AE_INSTALL_COMPONENT}) # icon, splash
 install(DIRECTORY "${PROJECT_SOURCE_DIR}/content/" DESTINATION content COMPONENT ${AE_INSTALL_COMPONENT}
         PATTERN "*.py" EXCLUDE        # authoring tools, not content
