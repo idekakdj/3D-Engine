@@ -1311,7 +1311,10 @@ validation-clean.
 
 **Verified on Windows (owner's Intel Arc PC, 2026-09-28).** `gi_room` and `gi_room_off` rendered on
 the Arc match the llvmpipe references visually (lit ceiling, filled shadows, red / green bleeding vs.
-black shadows without GI): the capture + SH projection path behaves the same on real hardware.
+black shadows without GI): the capture + SH projection path behaves the same on real hardware. In the
+editor (Debug build, validation on) the showcase's GI switch, the GI debug view and the point-shadowed
+lamp behave as intended; GPU time 3-5 ms with GI off, 4-6 ms with GI on (8 probes / frame). The
+selection outline was drawn light blue instead of yellow (R and B swapped in the packed colour; fixed).
 
 **Not done yet:** probe relocation out of walls and
 per-probe visibility (depth moments) to remove the remaining leaks; several volumes at once and

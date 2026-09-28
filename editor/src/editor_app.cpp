@@ -226,7 +226,7 @@ void EditorApp::on_render_frame(rhi::FrameInfo& frame, renderer::RenderScene& sc
         if (const auto* gv = world().try_get<gameplay::GIVolumeComponent>(sel)) {
             const renderer::GiVolume box = gameplay::gi_volume_from(world().world_matrix(sel), *gv);
             if (box.enabled) {
-                const u32 col = gv->enabled ? 0xFFFFD040u : 0xFF808080u; // RGBA8, R in the low byte
+                const u32 col = gv->enabled ? 0xFF40D0FFu : 0xFF808080u; // yellow / grey; RGBA8 packed with R in the low byte
                 for (int i = 0; i < 12; ++i) {
                     // Edge i joins corners a and b (bit 0 = x, 1 = y, 2 = z) that differ in one axis.
                     const int axis = i / 4;
