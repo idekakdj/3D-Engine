@@ -30,6 +30,7 @@ aether_add_module(editor
         src/panel_assets.cpp
         src/panel_material.cpp
         src/panel_projects.cpp
+        src/graph_editor.cpp
         src/self_test.cpp
     PUBLIC_DEPS
         aether::core

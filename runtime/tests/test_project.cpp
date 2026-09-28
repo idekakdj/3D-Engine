@@ -189,6 +189,7 @@ TEST_CASE("project: runtime content filter") {
     CHECK(is_runtime_content_file("scenes/a.aescene"));
     CHECK(is_runtime_content_file("prefabs/b.aeprefab"));
     CHECK(is_runtime_content_file("scripts/c.LUA"));
+    CHECK(is_runtime_content_file("scripts/graphs/d.aegraph")); // ADR-0018 visual scripts
     CHECK(is_runtime_content_file("input/game.json"));
     CHECK_FALSE(is_runtime_content_file("samples/cube/cube.gltf"));
     CHECK_FALSE(is_runtime_content_file("textures/t.png"));

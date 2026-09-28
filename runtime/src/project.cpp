@@ -278,7 +278,7 @@ void apply_project(const ProjectDesc& p, gameplay::AppDesc& desc) {
 // =================================================================================================
 bool is_runtime_content_file(const fs::path& file) {
     const std::string ext = lower(to_utf8(file.extension()));
-    return ext == ".aescene" || ext == ".aeprefab" || ext == ".lua" || ext == ".json";
+    return ext == ".aescene" || ext == ".aeprefab" || ext == ".lua" || ext == ".aegraph" || ext == ".json"; // .aegraph: ADR-0018
 }
 
 Result<PackageReport> package_project(const PackageOptions& o) {

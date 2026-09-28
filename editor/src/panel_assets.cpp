@@ -45,6 +45,7 @@ const char* kind_of(const std::filesystem::path& p) {
     if (e == ".aescene") return "scene";
     if (e == ".aeprefab") return "prefab";
     if (e == ".lua") return "script";
+    if (e == ".aegraph") return "graph"; // ADR-0018 visual script
     if (e == ".png" || e == ".jpg" || e == ".hdr" || e == ".ktx2") return "image";
     if (e == ".json") return "data";
     return "file";
@@ -104,11 +105,14 @@ void EditorApp::draw_assets() {
         return kind == "model" || kind == "prefab" ? "Add to scene"
                : kind == "scene"                   ? "Open"
                : kind == "script"                  ? "Attach"
+               : kind == "graph"                   ? "Edit"
                                                    : nullptr;
     };
     auto run_action = [&](const DirEntry& d) {
         if (d.directory) {
             navigate = d.path;
+        } else if (kind_of(d.path) == std::string("graph")) {
+            open_graph(d.path);
         } else if (kind_of(d.path) != std::string("scene") || play_state_ == PlayState::Edit) {
             instantiate_asset(d.path);
         }
@@ -132,6 +136,10 @@ void EditorApp::draw_assets() {
                 if (ImGui::MenuItem(a, nullptr, false, kind_of(d.path) != std::string("scene") || play_state_ == PlayState::Edit)) {
                     run_action(d);
                 }
+            }
+            if (kind_of(d.path) == std::string("graph") && ImGui::MenuItem("Attach to selected entity", nullptr, false,
+                                                                           selected() != kNullEntity)) {
+                instantiate_asset(d.path);
             }
             if (thumbnail_kind(d.path) != ThumbnailKind::None && ImGui::MenuItem("Refresh thumbnail")) {
                 thumbnails_->clear();
@@ -244,7 +252,7 @@ void EditorApp::draw_assets() {
                     const bool enabled = kind_of(d.path) != std::string("scene") || play_state_ == PlayState::Edit;
                     ImGui::BeginDisabled(!enabled);
                     if (ImGui::SmallButton(action)) {
-                        instantiate_asset(d.path);
+                        run_action(d);
                     }
                     ImGui::EndDisabled();
                 }

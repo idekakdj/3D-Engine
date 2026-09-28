@@ -1,5 +1,6 @@
 // panel_main.cpp — dock layout, main menu, toolbar, shortcuts and the open/save dialog.
 #include "editor_app.h"
+#include "graph_editor.h"
 
 #include "aether/core/input.h"
 #include "aether/editor/prefab.h"
@@ -185,6 +186,7 @@ void EditorApp::draw_menu_bar() {
     if (ImGui::BeginMenu("View")) {
         ImGui::MenuItem("Assets", nullptr, &show_assets_);
         ImGui::MenuItem("Material", nullptr, &show_material_);
+        ImGui::MenuItem("Visual Script", nullptr, &show_graph_, graph_editor_ != nullptr && graph_editor_->is_open());
         ImGui::MenuItem("Animation", nullptr, &show_animation_);
         ImGui::MenuItem("Console", nullptr, &show_console_);
         ImGui::MenuItem("Engine stats", nullptr, &show_stats_);

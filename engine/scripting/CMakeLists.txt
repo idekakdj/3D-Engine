@@ -9,6 +9,7 @@ aether_add_module(scripting
         src/bindings.cpp
         src/components.cpp
         src/scripting_subsystem.cpp
+        src/visual_script.cpp
     PUBLIC_DEPS
         aether::core
         aether::scene
@@ -32,7 +33,8 @@ add_library(aether::scripting_lua ALIAS aether.scripting_lua)
 aether_add_test(scripting
     tests/test_vm.cpp
     tests/test_bindings.cpp
-    tests/test_components.cpp)
+    tests/test_components.cpp
+    tests/test_visual_script.cpp)
 
 if(TARGET test.scripting)
     target_link_libraries(test.scripting PRIVATE aether::scripting_lua)

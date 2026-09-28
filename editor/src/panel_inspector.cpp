@@ -540,6 +540,19 @@ void EditorApp::draw_inspector() {
         bool remove = false;
         if (component_header("Script", &remove)) {
             bool changed = with("Script path").drag(input_text("Script", sc->script));
+            // ADR-0018: visual scripts.
+            if (sc->script.ends_with(".aegraph")) {
+                if (ImGui::Button("Edit Graph")) {
+                    open_graph(std::filesystem::path("scripts") / sc->script);
+                }
+            } else if (sc->script.empty() && play_state_ == PlayState::Edit) {
+                if (ImGui::Button("New Visual Script")) {
+                    new_graph_for(e);
+                }
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip("Creates scripts/<name>.aegraph with a starter graph and opens the node editor");
+                }
+            }
             changed |= with("Script enabled").toggle(ImGui::Checkbox("Enabled##script", &sc->enabled));
             auto* scripting = find_subsystem<scripting::ScriptingSubsystem>();
             scripting::ScriptVM* vm = scripting != nullptr ? scripting->vm() : nullptr;

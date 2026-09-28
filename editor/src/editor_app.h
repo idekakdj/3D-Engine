@@ -46,6 +46,7 @@ class RenderResourceCache;
 namespace aether::editor {
 
 class ThumbnailCache;
+class GraphEditor;
 
 struct EditorOptions {
     bool        self_test = false; // run the scripted self-test and exit with its result
@@ -163,6 +164,11 @@ public:
     void set_launcher(Launcher l) { launcher_ = std::move(l); }
     // Asset-browser thumbnails (null before on_init / after shutdown).
     [[nodiscard]] ThumbnailCache* thumbnails() noexcept { return thumbnails_.get(); }
+    // ADR-0018: visual scripts. open_graph takes a content-relative path ("scripts/door.aegraph").
+    bool open_graph(const std::filesystem::path& content_rel);
+    // Creates scripts/<entity name>.aegraph (starter graph), attaches it to `e` and opens it.
+    bool new_graph_for(Entity e);
+    [[nodiscard]] GraphEditor* graph_editor() noexcept { return graph_editor_.get(); }
     [[nodiscard]] EditHistory& history() noexcept { return history_; }
 
     // Editor camera (world-space pose) and the matrices the viewport renders with.
@@ -288,6 +294,8 @@ private:
     bool        console_autoscroll_ = true;
     std::filesystem::path assets_dir_; // content-relative directory being browsed
     std::unique_ptr<ThumbnailCache> thumbnails_;
+    std::unique_ptr<GraphEditor>    graph_editor_; // ADR-0018
+    bool                            show_graph_ = false;
     // projects window (ADR-0014)
     runtime::RecentProjects              recent_{ runtime::RecentProjects::default_file() };
     std::vector<runtime::ProjectEntry>   found_projects_;
@@ -320,6 +328,7 @@ private:
     bool self_test_passed_ = true;
     std::vector<std::string> self_test_failures_;
     std::filesystem::path    self_test_dir_;
+    std::filesystem::path    self_test_path_; // ADR-0018 graph file of the self-test
     f32  self_test_value_ = 0.0f;
     u64  self_test_uuid_  = 0;
     std::vector<u64> self_test_uuids_;

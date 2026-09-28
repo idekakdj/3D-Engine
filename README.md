@@ -21,7 +21,7 @@ relocatable game builds.
 | `engine/assets` | glTF / image importers, asset database, cooker, async AssetManager |
 | `engine/physics` | Jolt integration (bodies, characters, constraints, queries) |
 | `engine/animation` | skeletons, clips, anim graphs, IK, root motion |
-| `engine/scripting` | sandboxed Lua VM, script components, hot reload |
+| `engine/scripting` | sandboxed Lua VM, script components, hot reload, visual scripts (node graphs compiled to Lua) |
 | `engine/gameplay` | `Application`, render bridge, input maps, cameras, scene instantiation |
 | `editor/` | `aether-editor` |
 | `runtime/` | `aether-player`: `.aeproject` manifests, packaging, the game player |

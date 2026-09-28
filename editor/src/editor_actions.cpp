@@ -348,7 +348,7 @@ Entity EditorApp::instantiate_model_at(const std::filesystem::path& rel, Entity 
 
 bool EditorApp::drop_asset_in_viewport(const std::filesystem::path& rel, const Vec2& uv) {
     const std::string ext = extension_of(rel);
-    if (ext == ".lua") {
+    if (ext == ".lua" || ext == ".aegraph") { // ADR-0018: graphs attach like scripts
         const Ray ray = make_pick_ray(view_matrix(), projection_matrix(), uv);
         Entity    target = kNullEntity;
         if (gameplay::RenderResourceCache* cache = render_cache()) {
@@ -399,7 +399,7 @@ bool EditorApp::drop_asset_in_viewport(const std::filesystem::path& rel, const V
 
 bool EditorApp::drop_asset_on_entity(const std::filesystem::path& rel, Entity parent) {
     const std::string ext = extension_of(rel);
-    if (ext == ".lua") {
+    if (ext == ".lua" || ext == ".aegraph") { // ADR-0018: graphs attach like scripts
         if (!attach_script(world(), parent, rel)) {
             return false;
         }

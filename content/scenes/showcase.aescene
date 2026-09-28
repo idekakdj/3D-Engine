@@ -1963,6 +1963,57 @@
           "skeleton": "6f667268a110371850f5c77329c23de1"
         }
       }
+    },
+    {
+      "uuid": "5d2e8f41a6c37b90",
+      "components": {
+        "Name": {
+          "name": "Graph Cube"
+        },
+        "Transform": {
+          "position": [
+            3.5,
+            0.5,
+            4.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "scale": [
+            0.8,
+            0.8,
+            0.8
+          ]
+        },
+        "Visibility": {
+          "visible": true
+        },
+        "MeshRenderer": {
+          "mesh": "1404bb577a277ca8ad27f10d368c71c3",
+          "material": "a3dda6cfaa172e2ae744affcda30bbbb",
+          "cast_shadows": true,
+          "local_bounds": {
+            "min": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "max": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          }
+        },
+        "Script": {
+          "enabled": true,
+          "properties": [],
+          "script": "graphs/spin_and_hop.aegraph"
+        }
+      }
     }
   ]
 }

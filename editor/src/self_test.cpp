@@ -7,6 +7,7 @@
 // success.
 // Used for headless verification (Xvfb + llvmpipe) and CI.
 #include "editor_app.h"
+#include "graph_editor.h"
 #include "thumbnail_cache.h"
 
 #include "aether/animation/components.h"
@@ -592,7 +593,57 @@ void EditorApp::self_test_tick() {
         next();
         break;
     }
-    case 26: { // final checks
+    case 26: { // visual script (ADR-0018): New Visual Script -> edit -> save -> play -> it runs
+        if (self_test_frame_ == 3) {
+            const Entity e = create_entity(CreateKind::Cube);
+            w.get<NameComponent>(e).name = "SelftestGraph";
+            self_test_uuids_ = { scene::uuid_of(w, e) };
+            check(new_graph_for(e), "create a visual script for an entity");
+            GraphEditor* ge = graph_editor();
+            check(ge != nullptr && ge->is_open() && show_graph_, "the graph editor opened");
+            if (ge != nullptr) {
+                self_test_path_ = ge->file();
+                // Edit through the editor: On Start -> Move By (0, 5, 0), then save.
+                const u32 start = ge->add_node("event.start", Vec2(40.0f, 300.0f));
+                const u32 move = ge->add_node("action.translate", Vec2(300.0f, 300.0f));
+                check(ge->connect(start, "then", move, "in"), "wire On Start -> Move By");
+                ge->graph().find(move)->values["offset"] = Vec3(0.0f, 5.0f, 0.0f);
+                check(ge->compiled().ok(), "the edited graph compiles");
+                check(ge->undo() && ge->redo(), "graph undo / redo");
+                check(ge->save() && !ge->dirty(), "save the graph");
+            }
+            return;
+        }
+        if (self_test_frame_ == 8) { // a few frames of the editor window drawn
+            self_test_value_ = scene::world_position(w, ent(0)).y;
+            play();
+            return;
+        }
+        if (self_test_frame_ < 30) {
+            return;
+        }
+        const Entity e = ent(0);
+        auto*        scripting = find_subsystem<scripting::ScriptingSubsystem>();
+        const bool   running = scripting != nullptr && scripting->vm() != nullptr &&
+                             scripting->vm()->instance_state(e) == scripting::ScriptInstanceState::Running;
+        check(running, "the graph runs as a script instance");
+        check(e != kNullEntity && scene::world_position(w, e).y > self_test_value_ + 4.9f, "On Start moved the entity up 5 m");
+        const Quat r = e != kNullEntity ? scene::local_transform(w, e).rotation : Quat(1, 0, 0, 0);
+        check(std::abs(r.w) < 0.9999f, "On Update rotates the entity (starter graph)");
+        stop();
+        if (graph_editor() != nullptr) {
+            graph_editor()->close();
+        }
+        show_graph_ = false;
+        std::error_code ec;
+        std::filesystem::remove(self_test_path_, ec);
+        if (ent(0) != kNullEntity) {
+            w.destroy(ent(0));
+        }
+        next();
+        break;
+    }
+    case 27: { // final checks
         auto* bridge = find_subsystem<gameplay::RenderBridgeSubsystem>();
         check(bridge != nullptr && bridge->last_stats().instances >= 2, "the viewport renders the scene");
         check(viewport_.texture.is_valid(), "viewport render target exists");

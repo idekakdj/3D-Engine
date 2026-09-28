@@ -4,7 +4,7 @@
 > across rendering fidelity, editor/tooling, physics/animation, and scripting/gameplay.
 >
 > **Status:** Foundation phase (multi-session project). **Author:** Engine architect (orchestrator).
-> **Doc version:** 1.17 (ADR-0017 applied). Update this header on every material revision.
+> **Doc version:** 1.18 (ADR-0018 applied). Update this header on every material revision.
 
 ---
 
@@ -556,6 +556,7 @@ until it builds and its acceptance check passes.
 - **v1.15** — ADR-0015: point-light shadows (six-view cube shadows sharing the spot-shadow path).
 - **v1.16** — ADR-0016: dynamic diffuse global illumination (irradiance probe volume, GI Volume component).
 - **v1.17** — ADR-0017: reflection capture probes (box-projected prefiltered cubemaps, Reflection Probe component).
+- **v1.18** — ADR-0018: visual scripting (Blueprint-style node graphs compiled to Lua, node editor).
 
 ---
 
@@ -1381,3 +1382,85 @@ Probe -> captured every frame), player check and vertical slice validation-clean
 **Not done yet:** Arc references for `reflections` / `reflections_off`; screen-space reflections
 for contact detail; captures that include specular (second bounce); rotated boxes and sphere
 probes; saving captures with the scene for static lighting.
+
+## ADR-0018 — Visual scripting: node graphs compiled to Lua (2026-09-28)
+
+**Status:** accepted; verified on Linux. Fourth of the owner's "Unreal-style" features (Blueprints).
+
+**Decisions**
+1. **Graphs compile to Lua; no second runtime.** A visual script is a `.aegraph` JSON file
+   (`"format": "aether.graph"`, version 1) under `content/scripts`. `ScriptVM::read_script`
+   compiles it with `compile_graph_to_lua` when it is read. It is then an ordinary script:
+   per-entity instances, the sandbox and instruction budget, error isolation, hot reload (a graph
+   with errors keeps the previous version running), `declared_properties` for the inspector, and
+   packaging (`is_runtime_content_file` includes `.aegraph`). Script paths ending in `.aegraph` are
+   no longer suffixed with `.lua`. This mirrors Unreal compiling Blueprints to bytecode, and it
+   lets users read the generated Lua (View > Show generated Lua) to learn the scripting API.
+2. **Model** (`aether/scripting/visual_script.h`, in the scripting module, so the player runs
+   graphs without the editor): `VisualGraph` = nodes (id, type, canvas position, literals of
+   unconnected inputs, selected variable), links (output pin -> input pin) and variables (name,
+   type, default -> the script's `properties`). The pin types are exec, bool, number, vector,
+   string, entity and any. `connect()` enforces the rules: types compatible, one wire per data
+   input, one wire per exec output (exec inputs merge), no self links. An unconnected entity
+   input is **Self**.
+3. **Node library** (59 nodes).
+   * Events: On Start / On Update / On Key Pressed / On Key Released / On Event / Every N Seconds.
+   * Flow: Branch, Sequence, Delay.
+   * Actions: Print, Set (World) Position, Move By, Rotate, Set Scale, Set Visible, Look At, Spawn,
+     Destroy, Emit Event, Set Variable.
+   * Data: Get Variable, Self, Find Entity, positions and forward, Delta Time, Time, Is Key Down,
+     Key Axis, number maths, comparisons and logic, vector make / break / add / subtract / scale /
+   length / normalize / distance, and Join Text.
+4. **Compiler.** Pure nodes become inline Lua expressions, recursively from each input's wire.
+   Exec chains become statements: Branch becomes `if/else`, Sequence emits its outputs in order,
+   and Delay becomes `timer.after(function ... end)`. Nodes where two chains meet are inlined per
+   chain. Values produced by exec nodes (Spawn) live in `self.__n<id>_*`. Numbers are emitted as
+   float literals. Entity actions are guarded (`if t and t:valid()`).
+   * On Start: Start chains, `events.subscribe` for On Event and `timer.every` for Every N Seconds.
+   * On Update: Update chains and key events (`input.key_pressed / key_released`).
+   * Errors carry a node id: unknown node, missing variable, invalid or duplicate variable names,
+     wires to unknown pins or of incompatible types (hand-edited files), execution loops, data
+     loops, and nodes that cannot run.
+5. **Editor** (`editor/src/graph_editor.{h,cpp}`: a "Visual Script" window built on ImGui draw
+   lists with manual hit-testing; no third-party node library).
+   * Canvas: grid, pan (right / middle drag) and zoom (wheel, 0.4-1.6, the font scales with it).
+   * Nodes have colour-coded headers and help tooltips. Pins are triangles (exec) or circles
+     (data), colour-coded by type, and wires are bezier curves.
+   * Wiring: drag between pins; grab a connected input to move its wire; Alt+click clears a pin.
+     A right-click, or a wire dropped on empty space, opens a searchable node menu filtered to
+     compatible nodes, and the new node is auto-wired.
+   * Unconnected inputs are edited inline on the node. A variables list edits name, type and
+     default, and the palette adds nodes.
+   * Undo / redo use whole-graph snapshots. Del, Ctrl+D, Ctrl+S and Revert are available.
+   * Compile errors are listed live; clicking one focuses its node, which is outlined red.
+   * Entry points: Assets panel (double-click / "Edit" on `.aegraph`, "Attach to selected
+     entity"), inspector Script section ("New Visual Script" on an empty script path ->
+     `scripts/<name>.aegraph` with a starter graph, "Edit Graph"), View > Visual Script. Dropping a
+     graph on an entity or in the viewport attaches it like a Lua file.
+   * The showcase has a "Graph Cube" running `graphs/spin_and_hop.aegraph`: it spins at the
+     `spin_speed` variable, and Space makes it hop (Move By, Delay 0.4 s, Move By back, Print).
+
+**Verification (Linux).** `test.scripting` +5 cases:
+* connection rules (type checks, replacement, exec fan-out, self links, variable-typed pins);
+* JSON round trip, including malformed documents;
+* each compiler error kind;
+* a compiled graph running in a ScriptVM: On Start, On Update, variables as inspector-overridable
+  properties, Branch plus logic, Emit Event reaching an On Event graph on another entity;
+* key press, Sequence, Delay, Every N Seconds and Spawn, a broken edit keeping the old version,
+  and a fixed edit hot reloading.
+
+Also:
+* `test.runtime` packages `.aegraph` files.
+* Editor self-test: New Visual Script on a cube, editing through the editor (add nodes, wire, set
+  a literal, undo / redo), save, then Play. The instance runs, On Start moved the cube and the
+  starter graph rotates it. The file is removed afterwards.
+* The player check runs the showcase with the Graph Cube's graph. ctest 31/31, and every app
+  check is validation-clean.
+
+**Not done yet:**
+* Functions / macros (collapsed sub-graphs), local variables, and loops (For Each, While).
+* Collision / trigger events from physics.
+* Component nodes (lights, physics impulses, audio).
+* Comments and reroute nodes, copy / paste between graphs, and live debugging (highlighting the
+  wires that executed).
+

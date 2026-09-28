@@ -11,6 +11,7 @@
 #include "aether/scene/hierarchy_utils.h"
 #include "aether/scene/world.h"
 #include "aether/scripting/lua_integration.h"
+#include "aether/scripting/visual_script.h"
 
 #include <algorithm>
 #include <cctype>
@@ -202,7 +203,8 @@ bool normalize_script_path(std::string_view raw, std::string& out, std::string& 
         error = std::format("script path '{}' is empty", raw);
         return false;
     }
-    if (!(result.size() > 4 && result.ends_with(".lua"))) {
+    // ADR-0018: visual scripts (.aegraph) are compiled to Lua when read (read_script).
+    if (!(result.size() > 4 && result.ends_with(".lua")) && !result.ends_with(".aegraph")) {
         result += ".lua";
     }
     out = std::move(result);
@@ -577,6 +579,25 @@ bool ScriptVM::Impl::read_script(const std::string& rel, std::string& text, std:
         return false;
     }
     text.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+    if (rel.ends_with(".aegraph")) { // ADR-0018: node graph -> Lua
+        auto graph = graph_from_json(text);
+        if (!graph) {
+            error = std::format("visual script '{}': {}", rel, graph.error().message);
+            return false;
+        }
+        GraphCompileResult compiled = compile_graph_to_lua(graph.value(), rel);
+        if (!compiled.ok()) {
+            error = std::format("visual script '{}' has {} error(s):", rel, compiled.errors.size());
+            for (const GraphError& e : compiled.errors) {
+                const GraphNode* n = graph.value().find(e.node);
+                const NodeDef*   d = n != nullptr ? find_node_def(n->type) : nullptr;
+                error += std::format("\n  {}: {}", d != nullptr ? std::format("node {} ({})", e.node, d->title) : std::string("graph"),
+                                     e.message);
+            }
+            return false;
+        }
+        text = std::move(compiled.lua);
+    }
     return true;
 }
 

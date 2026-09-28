@@ -1,5 +1,6 @@
 // editor_app.cpp — EditorApp lifecycle, viewport rendering, editor camera and actions.
 #include "editor_app.h"
+#include "graph_editor.h"
 #include "thumbnail_cache.h"
 
 #include "aether/assets/asset_manager.h"
@@ -59,7 +60,7 @@ EditorApp::EditorApp(gameplay::AppDesc desc, EditorOptions options)
     fly_.move_speed          = 8.0f;
 }
 
-EditorApp::~EditorApp() = default; // ThumbnailCache is complete here (unique_ptr)
+EditorApp::~EditorApp() = default; // ThumbnailCache / GraphEditor are complete here (unique_ptr)
 
 // =================================================================================================
 // lifecycle
@@ -164,6 +165,9 @@ void EditorApp::on_imgui() {
     }
     if (show_animation_) {
         draw_animation_panel();
+    }
+    if (show_graph_ && graph_editor_) {
+        graph_editor_->draw(&show_graph_);
     }
     if (show_assets_) {
         draw_assets();
@@ -710,7 +714,7 @@ bool EditorApp::instantiate_asset(const std::filesystem::path& rel) {
         select_entities(roots);
         return true;
     }
-    if (ext == ".lua") {
+    if (ext == ".lua" || ext == ".aegraph") { // ADR-0018: graphs attach like scripts
         const Entity e = selected();
         if (e == kNullEntity) {
             AE_LOG_WARN("Editor", "select an entity to attach {} to", rel.generic_string());
@@ -782,6 +786,60 @@ void EditorApp::step() {
     if (play_state_ == PlayState::Paused) {
         step_simulation_once();
     }
+}
+
+} // namespace aether::editor
+
+// =================================================================================================
+// visual scripts (ADR-0018)
+// =================================================================================================
+namespace aether::editor {
+
+bool EditorApp::open_graph(const std::filesystem::path& content_rel) {
+    if (!graph_editor_) {
+        graph_editor_ = std::make_unique<GraphEditor>();
+    }
+    if (!graph_editor_->open(resolve_content_path(content_rel), content_rel.generic_string())) {
+        return false;
+    }
+    show_graph_ = true;
+    return true;
+}
+
+bool EditorApp::new_graph_for(Entity e) {
+    World& w = world();
+    if (e == kNullEntity || !w.valid(e)) {
+        return false;
+    }
+    // scripts/<entity name>.aegraph, made unique; only letters, digits, '_' and '-' are kept.
+    std::string base;
+    const auto* nc = w.try_get<NameComponent>(e);
+    for (const char c : nc != nullptr ? nc->name : std::string("graph")) {
+        base += std::isalnum(static_cast<unsigned char>(c)) || c == '_' || c == '-' ? c : '_';
+    }
+    if (base.empty()) {
+        base = "graph";
+    }
+    std::filesystem::path rel;
+    for (int k = 0;; ++k) {
+        rel = std::filesystem::path("scripts") / (k == 0 ? base + ".aegraph" : std::format("{}_{}.aegraph", base, k));
+        std::error_code ec;
+        if (!std::filesystem::exists(resolve_content_path(rel), ec)) {
+            break;
+        }
+    }
+    if (!graph_editor_) {
+        graph_editor_ = std::make_unique<GraphEditor>();
+    }
+    if (!graph_editor_->create(resolve_content_path(rel), rel.generic_string())) {
+        return false;
+    }
+    scripting::ScriptComponent sc;
+    sc.script = rel.lexically_relative("scripts").generic_string();
+    w.add<scripting::ScriptComponent>(e, sc);
+    record_edit("New visual script");
+    show_graph_ = true;
+    return true;
 }
 
 } // namespace aether::editor

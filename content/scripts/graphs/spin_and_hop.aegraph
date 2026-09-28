@@ -1,0 +1,214 @@
+{
+  "format": "aether.graph",
+  "version": 1,
+  "variables": [
+    {
+      "name": "spin_speed",
+      "type": "number",
+      "value": 45.0
+    }
+  ],
+  "nodes": [
+    {
+      "id": 1,
+      "type": "event.update",
+      "pos": [
+        40,
+        40
+      ],
+      "values": {}
+    },
+    {
+      "id": 2,
+      "type": "action.rotate",
+      "pos": [
+        330,
+        20
+      ],
+      "values": {
+        "axis": [
+          0,
+          1,
+          0
+        ],
+        "degrees": 0.0
+      }
+    },
+    {
+      "id": 3,
+      "type": "data.get_variable",
+      "pos": [
+        40,
+        190
+      ],
+      "values": {},
+      "variable": "spin_speed"
+    },
+    {
+      "id": 4,
+      "type": "data.delta_time",
+      "pos": [
+        40,
+        280
+      ],
+      "values": {}
+    },
+    {
+      "id": 5,
+      "type": "math.multiply",
+      "pos": [
+        40,
+        350
+      ],
+      "values": {
+        "a": 1.0,
+        "b": 1.0
+      }
+    },
+    {
+      "id": 6,
+      "type": "event.key_pressed",
+      "pos": [
+        40,
+        480
+      ],
+      "values": {
+        "key": "space"
+      }
+    },
+    {
+      "id": 7,
+      "type": "action.translate",
+      "pos": [
+        330,
+        460
+      ],
+      "values": {
+        "offset": [
+          0,
+          1,
+          0
+        ]
+      }
+    },
+    {
+      "id": 8,
+      "type": "flow.delay",
+      "pos": [
+        640,
+        460
+      ],
+      "values": {
+        "seconds": 0.4
+      }
+    },
+    {
+      "id": 9,
+      "type": "action.translate",
+      "pos": [
+        900,
+        460
+      ],
+      "values": {
+        "offset": [
+          0,
+          -1,
+          0
+        ]
+      }
+    },
+    {
+      "id": 10,
+      "type": "action.print",
+      "pos": [
+        1200,
+        460
+      ],
+      "values": {
+        "value": "hop!"
+      }
+    }
+  ],
+  "links": [
+    {
+      "from": [
+        1,
+        "then"
+      ],
+      "to": [
+        2,
+        "in"
+      ]
+    },
+    {
+      "from": [
+        3,
+        "value"
+      ],
+      "to": [
+        5,
+        "a"
+      ]
+    },
+    {
+      "from": [
+        4,
+        "seconds"
+      ],
+      "to": [
+        5,
+        "b"
+      ]
+    },
+    {
+      "from": [
+        5,
+        "result"
+      ],
+      "to": [
+        2,
+        "degrees"
+      ]
+    },
+    {
+      "from": [
+        6,
+        "then"
+      ],
+      "to": [
+        7,
+        "in"
+      ]
+    },
+    {
+      "from": [
+        7,
+        "then"
+      ],
+      "to": [
+        8,
+        "in"
+      ]
+    },
+    {
+      "from": [
+        8,
+        "then"
+      ],
+      "to": [
+        9,
+        "in"
+      ]
+    },
+    {
+      "from": [
+        9,
+        "then"
+      ],
+      "to": [
+        10,
+        "in"
+      ]
+    }
+  ]
+}

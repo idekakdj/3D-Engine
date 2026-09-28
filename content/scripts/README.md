@@ -129,3 +129,39 @@ entity raises an error. The only exceptions are `valid()` and `id()`.
   carries its file and line.
 
 Engine modules can add more tables, for example `physics`. See `lua_integration.h`.
+
+## Visual scripts (node graphs)
+
+A visual script is a `.aegraph` file: a Blueprint-style node graph that the engine compiles to Lua
+when it loads it. Attach it exactly like a Lua script (`ScriptComponent` with
+`script = "graphs/spin_and_hop.aegraph"`), so it gets the same per-entity instance, sandbox,
+error isolation and hot reload.
+
+* **Create one:** select an entity, then in the inspector's *Script* section press
+  **New Visual Script** (with an empty script path; add a *Script* component first). This makes
+  `scripts/<entity name>.aegraph` with a starter graph and opens the **Visual Script** window.
+  Double-click an `.aegraph` file in the Assets panel to edit it, or press **Edit Graph** in the
+  inspector.
+* **Events** (red) start execution: *On Start*, *On Update*, *On Key Pressed / Released*,
+  *On Event* (fired by *Emit Event* from any script) and *Every N Seconds*.
+* **Execution wires** (white) run nodes in order. *Branch*, *Sequence* and *Delay* control the
+  flow. Actions: *Print*, *Set Position*, *Set World Position*, *Move By*, *Rotate*,
+  *Set Scale*, *Set Visible*, *Look At*, *Spawn Entity*, *Destroy Entity*, *Emit Event* and
+  *Set Variable*.
+* **Data wires** (coloured by type: green number, yellow vector, red bool, pink text, blue
+  entity) feed values. They come from math, logic, vector, input, time and entity nodes. An
+  unconnected input uses the value typed into the node. Entity inputs default to **Self**.
+* **Variables** (left panel) are the graph's per-entity values. They become the script's
+  `properties`, so the inspector can override them per entity.
+* **Editing:**
+  * Right-click the canvas, or drop a wire on empty space, to add a node. The list is filtered
+    to nodes that fit the wire.
+  * Drag between pins to connect them. Dragging a connected input picks up its wire, and
+    Alt+click clears a pin.
+  * Right-drag pans the canvas and the mouse wheel zooms.
+  * Del deletes, Ctrl+D duplicates, Ctrl+Z / Ctrl+Y undo and redo, and Ctrl+S saves.
+* **Errors:** nodes with errors are outlined red, with a clickable list below the canvas. A
+  graph with errors does not replace the running version.
+* **Generated Lua:** *View > Show generated Lua* shows the code the graph turns into, which is
+  handy for learning the Lua API.
+
