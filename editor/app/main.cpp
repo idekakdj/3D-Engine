@@ -6,6 +6,7 @@
 //                content folder. An INSTALLED editor without --project opens (creating it on first
 //                run) "Documents/Aether Projects/Starter Project" (ADR-0013).
 //   --browse     open the asset browser in this content-relative folder (e.g. samples/props)
+//   --projects   open the Projects window (open / create projects) at startup
 //   --self-test  run the scripted editor workflow (self_test.cpp) and exit with its result.
 #include "aether/core/log.h"
 #include "aether/core/paths.h"
@@ -22,12 +23,16 @@ int main(int argc, char** argv) {
     defaults.window.title  = "Aether Editor";
     defaults.window.width  = 1600;
     defaults.window.height = 900;
+    defaults.window_icon   = "resources/aether.png"; // ADR-0014
+    defaults.splash_image  = "resources/splash.png";
+    defaults.splash_title  = "Aether Editor";
 #ifdef NDEBUG
     defaults.enable_validation = false; // release / installed builds: no Vulkan SDK layers needed
 #endif
 
     // ---- project: --project, else the installed default (Documents), else the engine content ----
     std::filesystem::path project_file;
+    std::string           project_name;
     for (int i = 1; i + 1 < argc; ++i) {
         if (std::strcmp(argv[i], "--project") == 0) {
             project_file = argv[i + 1];
@@ -51,11 +56,17 @@ int main(int argc, char** argv) {
         defaults.cooked_root   = project->cooked_root;
         defaults.startup_scene = project->startup_scene;
         defaults.window.title  = "Aether Editor - " + project->name;
+        project_name           = project->name;
         AE_LOG_INFO("Editor", "project '{}' ({})", project->name, project_file.generic_string());
     }
     const gameplay::AppDesc desc = gameplay::parse_command_line(argc, argv, defaults);
 
     editor::EditorOptions options;
+    if (!project_file.empty()) {
+        std::error_code ec;
+        options.project_file = std::filesystem::weakly_canonical(std::filesystem::absolute(project_file, ec), ec);
+        options.project_name = project_name;
+    }
     for (int i = 1; i < argc; ++i) {
         if (std::strcmp(argv[i], "--self-test") == 0) {
             options.self_test = true;
@@ -63,6 +74,8 @@ int main(int argc, char** argv) {
             options.select = argv[++i];
         } else if (std::strcmp(argv[i], "--browse") == 0 && i + 1 < argc) {
             options.browse = argv[++i];
+        } else if (std::strcmp(argv[i], "--projects") == 0) {
+            options.show_projects = true;
         }
     }
 

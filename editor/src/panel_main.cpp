@@ -82,6 +82,32 @@ void EditorApp::draw_menu_bar() {
                                                     : scene_path_.lexically_relative(content_root()).generic_string();
         }
         ImGui::Separator();
+        if (ImGui::MenuItem("New Project...")) {
+            open_projects_window(true);
+        }
+        if (ImGui::MenuItem("Open Project...")) {
+            open_projects_window(false);
+        }
+        if (ImGui::BeginMenu("Recent Projects", !recent_.entries().empty())) {
+            int id = 0;
+            for (const auto& m : recent_.entries()) {
+                ImGui::PushID(id++);
+                const bool current = m == options_.project_file;
+                if (ImGui::MenuItem(m.stem().string().c_str(), nullptr, current, !current)) {
+                    if (history_.dirty()) {
+                        pending_switch_ = m;
+                    } else {
+                        switch_project(m);
+                    }
+                }
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip("%s", m.generic_string().c_str());
+                }
+                ImGui::PopID();
+            }
+            ImGui::EndMenu();
+        }
+        ImGui::Separator();
         if (ImGui::MenuItem("Exit")) {
             request_exit(0);
         }

@@ -102,6 +102,17 @@ Result<void> EditorApp::on_init() {
             AE_LOG_WARN("Editor", "--browse: no content folder '{}'", options_.browse);
         }
     }
+    // Projects (ADR-0014): remember the open project for File > Recent Projects.
+    recent_.load();
+    if (!options_.project_file.empty()) {
+        recent_.add(options_.project_file);
+        if (auto r = recent_.save(); !r) {
+            AE_LOG_WARN("Editor", "{}", r.error().message);
+        }
+    }
+    if (options_.show_projects) {
+        open_projects_window(false);
+    }
     AE_LOG_INFO("Editor", "ready (content root {})", content_root().generic_string());
     return {};
 }
@@ -164,6 +175,7 @@ void EditorApp::on_imgui() {
     }
     draw_viewport();
     draw_file_dialog();
+    draw_projects_window();
     handle_shortcuts();
 
     // Deferred structural edits (never mutate the hierarchy while the tree is being drawn).

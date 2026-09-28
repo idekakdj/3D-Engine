@@ -3,7 +3,7 @@
 // instantiate a model, attach a script; M2: multi-select + group transform + undo, snapping,
 // multi-edit, selection duplicate/delete/reparent, prefab create/instantiate/revert, asset
 // drag-and-drop, material instance edit + undo, async GPU picking with CPU fallback, animation
-// view; thumbnails of images / models / prefabs / scenes) with the real UI running, then exits 0 on
+// view; thumbnails of images / models / prefabs / scenes; projects) with the real UI running, then exits 0 on
 // success.
 // Used for headless verification (Xvfb + llvmpipe) and CI.
 #include "editor_app.h"
@@ -521,7 +521,39 @@ void EditorApp::self_test_tick() {
         next();
         break;
     }
-    case 23: { // final checks
+    case 23: { // projects (ADR-0014): create + "reopen" through a recording launcher
+        std::vector<std::string>  launched;
+        std::filesystem::path     launched_exe;
+        set_launcher([&](const std::filesystem::path& exe, const std::vector<std::string>& args) -> Result<void> {
+            launched_exe = exe;
+            launched     = args;
+            return {};
+        });
+        const std::filesystem::path parent = self_test_dir_ / "projects";
+        check(create_and_open_project(parent, "Selftest Empty", runtime::ProjectTemplate::Empty), "create an empty project");
+        const std::filesystem::path empty = parent / "Selftest Empty" / "Selftest Empty.aeproject";
+        check(std::filesystem::exists(empty), "empty project manifest written");
+        check(std::filesystem::exists(parent / "Selftest Empty/content/scenes/main.aescene"), "empty project scene written");
+        check(launched.size() == 2 && launched[0] == "--project" && launched[1] == empty.string(),
+              "the editor is relaunched with --project <manifest>");
+        check(launched_exe == runtime::executable_path(), "relaunch uses this executable");
+        check(!recent_projects().entries().empty() &&
+                  recent_projects().entries().front() == std::filesystem::weakly_canonical(empty),
+              "the project is first in the recent list");
+        check(create_and_open_project(parent, "Selftest Starter", runtime::ProjectTemplate::Starter),
+              "create a project from the starter content");
+        check(std::filesystem::exists(parent / "Selftest Starter/content/scenes/showcase.aescene"), "starter content copied");
+        check(!create_and_open_project(parent, "bad/name", runtime::ProjectTemplate::Empty), "invalid names are refused");
+        // Leave the user's recent list as it was.
+        for (const auto* n : { "Selftest Empty", "Selftest Starter" }) {
+            recent_projects().remove(std::filesystem::weakly_canonical(parent / n / (std::string(n) + ".aeproject")));
+        }
+        (void)recent_projects().save();
+        set_launcher({});
+        next();
+        break;
+    }
+    case 24: { // final checks
         auto* bridge = find_subsystem<gameplay::RenderBridgeSubsystem>();
         check(bridge != nullptr && bridge->last_stats().instances >= 2, "the viewport renders the scene");
         check(viewport_.texture.is_valid(), "viewport render target exists");

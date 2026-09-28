@@ -6,6 +6,7 @@
 # Installed layout (the engine root is found as the executable's ancestor holding shaders/):
 #   bin/aether-editor(.exe), bin/aether-player(.exe)  (+ the MSVC runtime DLLs on Windows)
 #   shaders/                     compiled at startup (pipeline cache under the user's .aether/cache)
+#   resources/                   icon + splash (ADR-0014)
 #   content/                     starter content, copied to Documents/Aether Projects on first run
 #   licenses/<component>/        third-party license texts
 #   aether-install.json          install marker: user data never goes into the install folder
@@ -30,7 +31,28 @@ endif()
 #   cmake --install <build> --component Aether --prefix <dir>
 set(AE_INSTALL_COMPONENT Aether)
 install(TARGETS ${_ae_apps} RUNTIME DESTINATION bin COMPONENT ${AE_INSTALL_COMPONENT})
+
+# Windows: icon + version information embedded in each executable (ADR-0014).
+if(WIN32)
+    enable_language(RC)
+    string(REPLACE "." ";" _ae_ver "${PROJECT_VERSION}")
+    list(GET _ae_ver 0 AE_VERSION_MAJOR)
+    list(GET _ae_ver 1 AE_VERSION_MINOR)
+    list(GET _ae_ver 2 AE_VERSION_PATCH)
+    set(AE_ICON_FILE "${PROJECT_SOURCE_DIR}/resources/aether.ico")
+    foreach(_t ${_ae_apps})
+        if(_t STREQUAL "aether-editor")
+            set(AE_RC_DESCRIPTION "Aether Editor")
+        else()
+            set(AE_RC_DESCRIPTION "Aether Player")
+        endif()
+        set(AE_RC_NAME "${_t}")
+        configure_file("${PROJECT_SOURCE_DIR}/cmake/packaging/aether.rc.in" "${PROJECT_BINARY_DIR}/${_t}.rc" @ONLY)
+        target_sources(${_t} PRIVATE "${PROJECT_BINARY_DIR}/${_t}.rc")
+    endforeach()
+endif()
 install(DIRECTORY "${PROJECT_SOURCE_DIR}/shaders/" DESTINATION shaders COMPONENT ${AE_INSTALL_COMPONENT})
+install(DIRECTORY "${PROJECT_SOURCE_DIR}/resources/" DESTINATION resources COMPONENT ${AE_INSTALL_COMPONENT}) # icon, splash
 install(DIRECTORY "${PROJECT_SOURCE_DIR}/content/" DESTINATION content COMPONENT ${AE_INSTALL_COMPONENT}
         PATTERN "*.py" EXCLUDE        # authoring tools, not content
         PATTERN ".*" EXCLUDE)
@@ -113,6 +135,8 @@ if(WIN32)
         set(CPACK_INNOSETUP_SETUP_PrivilegesRequired "lowest")               # per-user install
         set(CPACK_INNOSETUP_SETUP_PrivilegesRequiredOverridesAllowed "dialog") # or all users
         set(CPACK_INNOSETUP_SETUP_AppId "{{7C1E1C5A-4F1B-4B7E-9C2E-AE7E7AE7A001}")
+        set(CPACK_INNOSETUP_ICON_FILE "${PROJECT_SOURCE_DIR}/resources/aether.ico")          # setup.exe
+        set(CPACK_INNOSETUP_SETUP_UninstallDisplayIcon "{app}/bin/aether-editor.exe") # Apps list
         message(STATUS "Aether: packaging with ZIP + Inno Setup (${AE_ISCC_EXECUTABLE})")
     else()
         message(STATUS "Aether: packaging with ZIP (install Inno Setup 6 for AetherSetup.exe)")

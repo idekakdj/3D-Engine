@@ -9,7 +9,10 @@
 #include <cstdlib>
 #include <fstream>
 #include <sstream>
+#include <algorithm>
 #include <string>
+#include <thread>
+#include <vector>
 
 namespace fs = std::filesystem;
 using namespace aether;
@@ -146,4 +149,101 @@ TEST_CASE("workspace: installed layouts use a Documents project, development tre
     REQUIRE(again.has_value());
     CHECK(*again == *u);
     clear_documents();
+}
+
+TEST_CASE("workspace: project names") {
+    CHECK(valid_project_name("My Game"));
+    CHECK(valid_project_name("Level-2_final"));
+    CHECK_FALSE(valid_project_name(""));
+    CHECK_FALSE(valid_project_name(" leading"));
+    CHECK_FALSE(valid_project_name("trailing "));
+    CHECK_FALSE(valid_project_name("dot."));
+    CHECK_FALSE(valid_project_name(".hidden"));
+    CHECK_FALSE(valid_project_name("a/b"));
+    CHECK_FALSE(valid_project_name("a\\b"));
+    CHECK_FALSE(valid_project_name("what?"));
+    CHECK_FALSE(valid_project_name("con"));
+    CHECK_FALSE(valid_project_name("LPT1"));
+    CHECK_FALSE(valid_project_name(std::string(65, 'x')));
+}
+
+TEST_CASE("workspace: create empty and starter projects, find them") {
+    TempDir install("tmpl");
+    TempDir parent("parent");
+    make_install(install.path, true);
+
+    auto empty = create_project(parent.path, "Empty One", ProjectTemplate::Empty, install.path / "content");
+    REQUIRE_MESSAGE(empty.has_value(), empty.error().message);
+    CHECK(*empty == parent.path / "Empty One" / "Empty One.aeproject");
+    auto ep = load_project(*empty);
+    REQUIRE(ep.has_value());
+    CHECK(ep->startup_scene == fs::path("scenes/main.aescene"));
+    const std::string scene = read_text(parent.path / "Empty One/content/scenes/main.aescene");
+    CHECK(scene.find("\"Camera\"") != std::string::npos);
+    CHECK(scene.find("\"Sun\"") != std::string::npos);
+    CHECK(scene.find("\"Floor\"") != std::string::npos);
+    CHECK(fs::is_directory(parent.path / "Empty One/content/scripts"));
+
+    auto starter = create_project(parent.path, "Starter Copy", ProjectTemplate::Starter, install.path / "content");
+    REQUIRE_MESSAGE(starter.has_value(), starter.error().message);
+    CHECK(fs::exists(parent.path / "Starter Copy/content/scenes/showcase.aescene"));
+
+    // Existing non-empty folders and bad names are refused.
+    CHECK(create_project(parent.path, "Empty One", ProjectTemplate::Empty, {}).error().code == ErrorCode::AlreadyExists);
+    CHECK(create_project(parent.path, "bad/name", ProjectTemplate::Empty, {}).error().code == ErrorCode::InvalidArgument);
+
+    const auto found = find_projects(parent.path);
+    REQUIRE(found.size() == 2);
+    CHECK(found[0].name == "Empty One");
+    CHECK(found[1].name == "Starter Copy");
+    CHECK(found[1].manifest == *starter);
+    CHECK(find_projects(parent.path / "missing").empty());
+}
+
+TEST_CASE("workspace: recent projects are ordered, deduplicated, capped and persisted") {
+    TempDir t("recent");
+    std::vector<fs::path> manifests;
+    for (int i = 0; i < 12; ++i) {
+        manifests.push_back(t.path / ("p" + std::to_string(i) + ".aeproject"));
+        write_text(manifests.back(), "{}");
+    }
+    const fs::path file = t.path / "cache/recent.json";
+    RecentProjects r(file);
+    r.load(); // no file yet
+    CHECK(r.entries().empty());
+    for (const fs::path& m : manifests) {
+        r.add(m);
+    }
+    REQUIRE(r.entries().size() == RecentProjects::kMaxRecent);
+    CHECK(r.entries().front() == fs::weakly_canonical(manifests[11]));
+    r.add(manifests[5]); // re-opening moves it to the front without duplicating
+    CHECK(r.entries().front() == fs::weakly_canonical(manifests[5]));
+    CHECK(std::count(r.entries().begin(), r.entries().end(), fs::weakly_canonical(manifests[5])) == 1);
+    REQUIRE(r.save().has_value());
+
+    fs::remove(manifests[11]); // deleted projects disappear on load
+    RecentProjects again(file);
+    again.load();
+    CHECK(again.entries().size() == RecentProjects::kMaxRecent - 1);
+    CHECK(again.entries().front() == fs::weakly_canonical(manifests[5]));
+    CHECK(std::find(again.entries().begin(), again.entries().end(), fs::weakly_canonical(manifests[11])) ==
+          again.entries().end());
+}
+
+TEST_CASE("workspace: executable path and detached launch") {
+    const fs::path exe = executable_path();
+    CHECK(fs::is_regular_file(exe));
+#ifdef _WIN32
+    const fs::path shell = fs::path(std::getenv("SystemRoot") ? std::getenv("SystemRoot") : "C:\\Windows") / "System32" / "cmd.exe";
+    CHECK(launch_detached(shell, { "/c", "exit 0" }).has_value());
+#else
+    TempDir t("launch");
+    const fs::path marker = t.path / "launched";
+    CHECK(launch_detached("/bin/sh", { "-c", "touch '" + marker.string() + "'" }).has_value());
+    for (int i = 0; i < 100 && !fs::exists(marker); ++i) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    }
+    CHECK(fs::exists(marker));
+#endif
+    CHECK_FALSE(launch_detached(fs::path("/definitely/not/here"), {}).has_value());
 }

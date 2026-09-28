@@ -29,6 +29,7 @@
 #if AE_WITH_SCRIPTING
 #    include "aether/scripting/scripting_subsystem.h"
 #endif
+#include "app_identity.h"
 #include "lua_bindings.h"
 
 #include <imgui.h>
@@ -191,6 +192,24 @@ Result<void> Application::initialize() {
         s.imgui = true;
     }
 
+    // ---- identity: window icon + splash while the slow steps below run (ADR-0014) --------------------
+    auto from_root = [](const std::filesystem::path& p) { return p.is_absolute() ? p : paths::engine_root() / p; };
+    if (!s.desc.window_icon.empty()) {
+        set_window_icon_png(*s.window, from_root(s.desc.window_icon));
+    }
+    std::unique_ptr<SplashScreen> splash;
+    if (s.imgui && !s.desc.splash_image.empty()) {
+        const std::string title = (s.desc.splash_title.empty() ? s.desc.window.title : s.desc.splash_title) +
+                                  "   " AE_VERSION_STRING;
+        splash = std::make_unique<SplashScreen>(*s.device, *s.window, from_root(s.desc.splash_image), title);
+    }
+    auto progress = [&splash](const char* status) {
+        if (splash) {
+            splash->show(status);
+        }
+    };
+    progress("Compiling shaders...");
+
     // ---- renderer ---------------------------------------------------------------------------------
     renderer::RendererDesc rd;
     rd.device      = s.device.get();
@@ -214,6 +233,7 @@ Result<void> Application::initialize() {
     }
 
     // ---- assets -----------------------------------------------------------------------------------
+    progress("Preparing assets...");
     s.assets = std::make_unique<assets::AssetManager>();
     assets::AssetManagerConfig ac;
     ac.content_root = s.desc.content_root.empty() ? paths::content_dir() : s.desc.content_root;
@@ -299,6 +319,7 @@ Result<void> Application::initialize() {
 
     // ---- startup scene ------------------------------------------------------------------------------
     if (!s.desc.startup_scene.empty()) {
+        progress("Loading scene...");
         const std::filesystem::path file = s.desc.startup_scene.is_absolute()
                                                ? s.desc.startup_scene
                                                : ac.content_root / s.desc.startup_scene;
@@ -316,9 +337,11 @@ Result<void> Application::initialize() {
         }
     }
 
+    progress("Starting...");
     if (auto init = on_init(); !init) {
         return init;
     }
+    splash.reset(); // frees the splash image (waits for the GPU once)
     AE_LOG_INFO("App", "initialized: {} subsystems", s.entries.size());
     return {};
 }

@@ -9,8 +9,8 @@
 #   aether.animation -> AE_WITH_ANIMATION=1   (AnimationSubsystem, skinning palettes)
 #   aether.scripting -> AE_WITH_SCRIPTING=1   (ScriptingSubsystem, physics Lua bindings)
 
-set(_gameplay_private_deps aether::physics imgui nlohmann_json::nlohmann_json)
-set(_gameplay_private_defines)
+set(_gameplay_private_deps aether::physics imgui nlohmann_json::nlohmann_json aether_stb)
+set(_gameplay_private_defines "AE_VERSION_STRING=\"${PROJECT_VERSION}\"")
 
 if(TARGET aether.animation)
     list(APPEND _gameplay_private_deps aether::animation)
@@ -31,6 +31,7 @@ endif()
 aether_add_module(gameplay
     SOURCES
         src/application.cpp
+        src/app_identity.cpp
         src/command_line.cpp
         src/input_map.cpp
         src/camera_controller.cpp

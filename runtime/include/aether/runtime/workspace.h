@@ -20,7 +20,9 @@
 #include "aether/core/types.h"
 
 #include <filesystem>
+#include <string>
 #include <string_view>
+#include <vector>
 
 namespace aether::runtime {
 
@@ -60,5 +62,56 @@ struct StarterProject {
 // projects_dir(), created from `<engine_root>/content` on first use. Empty path (no error) when
 // `engine_root` is not an installed layout and its content folder is writable (development).
 [[nodiscard]] Result<std::filesystem::path> default_user_project(const std::filesystem::path& engine_root);
+
+// ---- project management (ADR-0014; the editor's Projects window) --------------------------------
+
+enum class ProjectTemplate : u8 {
+    Starter = 0, // a copy of the installed starter content (showcase scene, samples, scripts)
+    Empty,       // one scene with a camera, a sun and a floor
+};
+
+// A usable folder / project name: 1..64 chars, not only spaces, no path separators or characters
+// Windows forbids in file names, no leading / trailing space or dot, not a reserved device name.
+[[nodiscard]] bool valid_project_name(std::string_view name);
+
+// Creates `<parent>/<name>/<name>.aeproject` (+ content/, the startup scene "scenes/main.aescene"
+// for Empty or the starter's showcase). Fails if the folder exists and is not empty.
+[[nodiscard]] Result<std::filesystem::path> create_project(const std::filesystem::path& parent, std::string_view name,
+                                                           ProjectTemplate tmpl,
+                                                           const std::filesystem::path& starter_content);
+
+struct ProjectEntry {
+    std::string           name;
+    std::filesystem::path manifest;
+};
+// The *.aeproject files directly in `dir` or one folder below it, sorted by name.
+[[nodiscard]] std::vector<ProjectEntry> find_projects(const std::filesystem::path& dir);
+
+// Most-recently-opened projects (absolute manifest paths), newest first, at most kMaxRecent.
+// Stored as JSON (default: <user cache dir>/recent_projects.json). Missing manifests are dropped
+// when loaded.
+class RecentProjects {
+public:
+    static constexpr std::size_t kMaxRecent = 10;
+    explicit RecentProjects(std::filesystem::path file);
+    [[nodiscard]] static std::filesystem::path default_file();
+
+    void load();
+    [[nodiscard]] Result<void> save() const;
+    void add(const std::filesystem::path& manifest); // moves it to the front
+    void remove(const std::filesystem::path& manifest);
+    [[nodiscard]] const std::vector<std::filesystem::path>& entries() const noexcept { return entries_; }
+
+private:
+    std::filesystem::path              file_;
+    std::vector<std::filesystem::path> entries_;
+};
+
+// The running program's executable (GetModuleFileNameW / /proc/self/exe).
+[[nodiscard]] std::filesystem::path executable_path();
+
+// Starts `exe args...` as an independent process (not waited for). Used to reopen the editor on
+// another project.
+[[nodiscard]] Result<void> launch_detached(const std::filesystem::path& exe, const std::vector<std::string>& args);
 
 } // namespace aether::runtime

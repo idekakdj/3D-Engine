@@ -27,9 +27,11 @@
 #include "aether/gameplay/procedural_mesh.h"
 #include "aether/renderer/render_scene.h"
 #include "aether/rhi/resources.h"
+#include "aether/runtime/workspace.h"
 #include "aether/scene/entity.h"
 
 #include <filesystem>
+#include <functional>
 #include <map>
 #include <memory>
 #include <optional>
@@ -49,6 +51,9 @@ struct EditorOptions {
     bool        self_test = false; // run the scripted self-test and exit with its result
     std::string select;            // entity name to select (and focus) after startup
     std::string browse;            // content-relative folder the asset browser opens in
+    std::filesystem::path project_file; // the open project's manifest (empty: the engine content folder)
+    std::string           project_name;
+    bool                  show_projects = false; // open the Projects window at startup
 };
 
 enum class CreateKind : u8 {
@@ -141,6 +146,19 @@ public:
     void sync_materials();
     [[nodiscard]] assets::MaterialData material_data_for(const AssetId& id);
     [[nodiscard]] PlayState play_state() const noexcept { return play_state_; }
+
+    // ---- projects (ADR-0014) --------------------------------------------------------------------
+    // Reopens the editor on `manifest` (a new editor process; this one exits). Unsaved scene
+    // changes must have been handled by the caller (the UI asks). Returns false if the launch failed.
+    bool switch_project(const std::filesystem::path& manifest);
+    // Creates a project and switches to it.
+    bool create_and_open_project(const std::filesystem::path& parent, const std::string& name,
+                                 runtime::ProjectTemplate tmpl);
+    [[nodiscard]] runtime::RecentProjects& recent_projects() noexcept { return recent_; }
+    void open_projects_window(bool new_tab);
+    // Replaces the process launcher (self-test: record instead of starting a second editor).
+    using Launcher = std::function<Result<void>(const std::filesystem::path&, const std::vector<std::string>&)>;
+    void set_launcher(Launcher l) { launcher_ = std::move(l); }
     // Asset-browser thumbnails (null before on_init / after shutdown).
     [[nodiscard]] ThumbnailCache* thumbnails() noexcept { return thumbnails_.get(); }
     [[nodiscard]] EditHistory& history() noexcept { return history_; }
@@ -169,6 +187,7 @@ private:
     void draw_assets();
     void draw_console();
     void draw_file_dialog();
+    void draw_projects_window();
     void draw_material_editor();
     void draw_animation_panel();
     void draw_viewport_gizmo(const Vec2& origin, bool game_view, bool& gizmo_hover);
@@ -267,6 +286,18 @@ private:
     bool        console_autoscroll_ = true;
     std::filesystem::path assets_dir_; // content-relative directory being browsed
     std::unique_ptr<ThumbnailCache> thumbnails_;
+    // projects window (ADR-0014)
+    runtime::RecentProjects              recent_{ runtime::RecentProjects::default_file() };
+    std::vector<runtime::ProjectEntry>   found_projects_;
+    bool                                 show_projects_ = false;
+    bool                                 projects_new_tab_ = false;
+    std::string                          new_project_name_ = "My Project";
+    std::string                          new_project_location_;
+    int                                  new_project_template_ = 0; // 0 starter content, 1 empty
+    std::string                          open_project_path_;
+    std::string                          projects_error_;
+    std::filesystem::path                pending_switch_; // waiting for the unsaved-changes answer
+    Launcher                             launcher_;
     bool                            assets_grid_ = true;   // grid of thumbnails, else a list
     f32                             assets_tile_ = 88.0f;  // grid tile size (pixels)
 

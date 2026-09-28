@@ -1,0 +1,32 @@
+// Generated from cmake/packaging/aether.rc.in (ADR-0014): icon + version information.
+#include <windows.h>
+
+IDI_ICON1 ICON "@AE_ICON_FILE@"
+
+VS_VERSION_INFO VERSIONINFO
+ FILEVERSION @AE_VERSION_MAJOR@,@AE_VERSION_MINOR@,@AE_VERSION_PATCH@,0
+ PRODUCTVERSION @AE_VERSION_MAJOR@,@AE_VERSION_MINOR@,@AE_VERSION_PATCH@,0
+ FILEFLAGSMASK VS_FFI_FILEFLAGSMASK
+ FILEFLAGS 0x0L
+ FILEOS VOS_NT_WINDOWS32
+ FILETYPE VFT_APP
+ FILESUBTYPE VFT2_UNKNOWN
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904b0"
+        BEGIN
+            VALUE "CompanyName", "Aether"
+            VALUE "FileDescription", "@AE_RC_DESCRIPTION@"
+            VALUE "FileVersion", "@PROJECT_VERSION@"
+            VALUE "InternalName", "@AE_RC_NAME@"
+            VALUE "OriginalFilename", "@AE_RC_NAME@.exe"
+            VALUE "ProductName", "Aether"
+            VALUE "ProductVersion", "@PROJECT_VERSION@"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x409, 1200
+    END
+END

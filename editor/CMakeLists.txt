@@ -29,11 +29,13 @@ aether_add_module(editor
         src/panel_inspector.cpp
         src/panel_assets.cpp
         src/panel_material.cpp
+        src/panel_projects.cpp
         src/self_test.cpp
     PUBLIC_DEPS
         aether::core
         aether::scene
         aether::gameplay
+        aether::runtime
     PRIVATE_DEPS
         aether::physics
         aether::scripting

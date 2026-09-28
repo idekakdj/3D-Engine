@@ -26,6 +26,7 @@
 #include <memory>
 #include <optional>
 #include <span>
+#include <string>
 #include <utility>
 
 namespace aether {
@@ -61,6 +62,10 @@ struct AppDesc {
     // source import, no hot reload). cooked_root: empty => paths::asset_dir().
     bool                  cooked_assets_only = false;
     std::filesystem::path cooked_root;
+    // ADR-0014 (additive): application identity. Relative paths resolve against the engine root.
+    std::filesystem::path window_icon;  // PNG (e.g. "resources/aether.png"); empty = platform default
+    std::filesystem::path splash_image; // PNG shown with splash_title + progress while initialize()
+    std::string           splash_title; //   runs (shader compilation, asset scan, scene load); needs imgui
 };
 
 // Parses the shared CLI flags into `defaults`: --frames N, --scene <path>, --no-validation,

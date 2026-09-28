@@ -142,6 +142,7 @@ int main(int argc, char** argv) {
 
     gameplay::AppDesc defaults;
     defaults.imgui             = false;
+    defaults.window_icon       = "resources/aether.png"; // ADR-0014 (games can ship their own later)
     defaults.enable_validation = false; // shipping default; debug builds opt in below
 #if !defined(NDEBUG)
     defaults.enable_validation = true;
