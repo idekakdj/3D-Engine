@@ -100,6 +100,11 @@ RendererImpl::~RendererImpl() {
     destroy_persistent(point_shadow_map_);
     destroy_persistent(gi_capture_color_);
     destroy_persistent(gi_capture_depth_);
+    destroy_persistent(refl_capture_color_);
+    destroy_persistent(refl_capture_depth_);
+    for (ReflSlot& s : refl_) {
+        release_refl_slot(s, false);
+    }
     if (gi_.buffer.is_valid()) {
         device_.destroy(gi_.buffer);
         gi_.buffer = {};

@@ -37,7 +37,11 @@ inline constexpr u32 kMaxGiProbesPerFrame = 64;
 inline constexpr u32 kMaxGiProbeAxis = 64;      // probes per axis
 inline constexpr u32 kMaxGiProbes = 32768;      // probes per volume
 inline constexpr u32 kGiProjectThreads = 64;    // gi_project.comp workgroup size
-inline constexpr u32 kMaxViewTableEntries = kMaxLocalShadowViews + kMaxGiProbesPerFrame * kPointShadowFaces;
+// ADR-0017: reflection capture probes. One probe is captured per frame (6 faces), its views follow
+// the GI capture views in the table.
+inline constexpr u32 kMaxReflectionProbes = 8;
+inline constexpr u32 kReflViewBase = kMaxLocalShadowViews + kMaxGiProbesPerFrame * kPointShadowFaces;
+inline constexpr u32 kMaxViewTableEntries = kReflViewBase + kPointShadowFaces;
 inline constexpr u32 kMaxLights = 4096;       // uploaded per frame (extra lights are dropped)
 inline constexpr u32 kGpuInvalidIndex = 0xFFFF'FFFFu;
 
@@ -185,6 +189,10 @@ struct GpuFrame {
     f32  gi_normal_bias = 0.0f;              // 1068 world units along the surface normal
     UVec3 gi_counts{ 0 };                    // 1072 probes per axis (>= 2 each when on)
     u32  gi_pad = 0;                         // 1084
+    // ADR-0017: reflection probes, smallest box first.
+    u64  reflection_probes = 0;              // 1088 ReflectionProbeBuffer
+    u32  reflection_probe_count = 0;         // 1096
+    u32  reflection_pad = 0;                 // 1100
 };
 static_assert(offsetof(GpuFrame, view) == 48);
 static_assert(offsetof(GpuFrame, cascade_view_proj) == 560);
@@ -201,7 +209,22 @@ static_assert(offsetof(GpuFrame, spot_shadows) == 1016);
 static_assert(offsetof(GpuFrame, spot_shadow_count) == 1028);
 static_assert(offsetof(GpuFrame, gi_probes) == 1032);
 static_assert(offsetof(GpuFrame, gi_counts) == 1072);
-static_assert(sizeof(GpuFrame) == 1088);
+static_assert(offsetof(GpuFrame, reflection_probes) == 1088);
+static_assert(sizeof(GpuFrame) == 1104);
+
+// ADR-0017: one reflection capture probe (a prefiltered cube captured at `position`, box-projected
+// onto `box_min..box_max`, faded out over `blend_distance` inside the box faces).
+struct GpuReflectionProbe {
+    Vec3 box_min{ 0.0f };          // 0
+    f32  intensity = 1.0f;         // 12
+    Vec3 box_max{ 0.0f };          // 16
+    f32  blend_distance = 1.0f;    // 28
+    Vec3 position{ 0.0f };         // 32
+    u32  cube = kGpuInvalidIndex;  // 44 samplerCube (prefiltered GGX mips)
+    u32  mips = 1;                 // 48
+    u32  pad0 = 0, pad1 = 0, pad2 = 0;
+};
+static_assert(sizeof(GpuReflectionProbe) == 64);
 
 // ADR-0016: one irradiance probe - L1 spherical harmonics pre-convolved with the clamped cosine
 // and divided by pi, per colour channel: irradiance/pi (n) = c.x + dot(c.yzw, n).
@@ -477,6 +500,28 @@ struct GiProjectPush {
     u32 pad = 0;
 };
 static_assert(sizeof(GiProjectPush) == 40);
+
+// ADR-0017: refl_resolve.comp - the 6 captured faces -> mip 0 of the probe's environment cube.
+struct ReflResolvePush {
+    u64  frame = 0;       // 0  FrameData (sky, capture view matrices)
+    u32  capture_tex = 0; // 8  sampler2DArray (6 layers; a < 0 = back face, 0 = sky)
+    u32  dst_img = 0;     // 12 image2DArray (cube mip 0)
+    u32  size = 0;        // 16 face edge in texels (capture and cube)
+    u32  view_base = 0;   // 20 GpuSpotShadow entry of face 0
+    u32  pad0 = 0, pad1 = 0;
+    Vec3 position{ 0.0f };// 32 capture point
+    f32  pad2 = 0.0f;
+};
+static_assert(sizeof(ReflResolvePush) == 48);
+
+// ADR-0017: cube_downsample.comp - 2x2 box filter of one cube mip into the next.
+struct CubeDownsamplePush {
+    u32 src_img = 0;
+    u32 dst_img = 0;
+    u32 dst_size = 0;
+    u32 pad = 0;
+};
+static_assert(sizeof(CubeDownsamplePush) == 16);
 
 struct TonemapPush {
     u32  color_tex = 0;       // 0  HDR input (TAA output or scene color)

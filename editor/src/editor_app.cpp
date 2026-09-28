@@ -221,28 +221,31 @@ void EditorApp::on_imgui() {
 }
 
 void EditorApp::on_render_frame(rhi::FrameInfo& frame, renderer::RenderScene& scene) {
-    // ADR-0016: outline the selected GI volume (edit mode only).
-    if (const Entity sel = selected(); play_state_ == PlayState::Edit && sel != kNullEntity && world().valid(sel)) {
-        if (const auto* gv = world().try_get<gameplay::GIVolumeComponent>(sel)) {
-            const renderer::GiVolume box = gameplay::gi_volume_from(world().world_matrix(sel), *gv);
-            if (box.enabled) {
-                const u32 col = gv->enabled ? 0xFF40D0FFu : 0xFF808080u; // yellow / grey; RGBA8 packed with R in the low byte
-                for (int i = 0; i < 12; ++i) {
-                    // Edge i joins corners a and b (bit 0 = x, 1 = y, 2 = z) that differ in one axis.
-                    const int axis = i / 4;
-                    const int rest = i % 4;
-                    const int lo = axis == 0 ? (rest & 1) << 1 | (rest & 2) << 1
-                                   : axis == 1 ? (rest & 1) | (rest & 2) << 1
-                                               : (rest & 1) | (rest & 2);
-                    const int a = lo;
-                    const int b = lo | (1 << axis);
-                    auto corner = [&](int c) {
-                        return Vec3((c & 1) ? box.max.x : box.min.x, (c & 2) ? box.max.y : box.min.y,
-                                    (c & 4) ? box.max.z : box.min.z);
-                    };
-                    scene.debug_lines.push_back(renderer::RenderLine{ corner(a), corner(b), col, col });
+    // Outline the selected GI volume (ADR-0016, yellow) / reflection probe (ADR-0017, light blue)
+    // in edit mode; grey while disabled. RGBA8 packed with R in the low byte.
+    auto outline = [&scene](const Vec3& lo, const Vec3& hi, u32 col) {
+        auto corner = [&](int c) {
+            return Vec3((c & 1) ? hi.x : lo.x, (c & 2) ? hi.y : lo.y, (c & 4) ? hi.z : lo.z);
+        };
+        for (int a = 0; a < 8; ++a) {
+            for (int axis = 0; axis < 3; ++axis) {
+                if ((a & (1 << axis)) == 0) { // each edge once: from the corner with that bit clear
+                    scene.debug_lines.push_back(renderer::RenderLine{ corner(a), corner(a | (1 << axis)), col, col });
                 }
             }
+        }
+    };
+    if (const Entity sel = selected(); play_state_ == PlayState::Edit && sel != kNullEntity && world().valid(sel)) {
+        const Mat4 m = world().world_matrix(sel);
+        if (const auto* gv = world().try_get<gameplay::GIVolumeComponent>(sel)) {
+            const renderer::GiVolume box = gameplay::gi_volume_from(m, *gv);
+            if (box.enabled) {
+                outline(box.min, box.max, gv->enabled ? 0xFF40D0FFu : 0xFF808080u);
+            }
+        }
+        if (const auto* rp = world().try_get<gameplay::ReflectionProbeComponent>(sel)) {
+            const renderer::ReflectionProbe p = gameplay::reflection_probe_from(m, *rp, 1);
+            outline(p.box_min, p.box_max, rp->enabled ? 0xFFFFC040u : 0xFF808080u);
         }
     }
     if (viewport_.texture.is_valid() && viewport_.size.x > 0 && viewport_.size.y > 0) {
@@ -580,6 +583,7 @@ Entity EditorApp::create_entity(CreateKind kind, Entity parent) {
     case CreateKind::SpotLight: name = "Spot Light"; break;
     case CreateKind::Camera: name = "Camera"; break;
     case CreateKind::GIVolume: name = "GI Volume"; break;
+    case CreateKind::ReflectionProbe: name = "Reflection Probe"; break;
     }
     const bool   has_parent = parent != kNullEntity && w.valid(parent);
     const Entity e          = has_parent ? w.create_child(parent, name) : w.create(name);
@@ -633,6 +637,10 @@ Entity EditorApp::create_entity(CreateKind kind, Entity parent) {
     case CreateKind::GIVolume: // ADR-0016: the entity's scale is the box size
         w.add<gameplay::GIVolumeComponent>(e);
         scene::set_local_scale(w, e, Vec3(16.0f, 6.0f, 16.0f));
+        break;
+    case CreateKind::ReflectionProbe: // ADR-0017: capture at the centre, box = the entity's scale
+        w.add<gameplay::ReflectionProbeComponent>(e);
+        scene::set_local_scale(w, e, Vec3(10.0f, 4.0f, 10.0f));
         break;
     }
     w.update_transforms();

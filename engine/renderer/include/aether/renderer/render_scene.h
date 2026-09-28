@@ -91,11 +91,25 @@ struct GiVolume {
     f32  intensity = 1.0f;
 };
 
+// ADR-0017 (additive): a reflection capture probe. The renderer captures a cubemap of the scene at
+// `position` (re-captured when the probe changes, and continuously when reflection_realtime is on)
+// and uses it, projected onto the box, for the specular reflections of surfaces inside the box
+// (the sky outside; the smallest containing box wins, blended over `blend_distance`).
+struct ReflectionProbe {
+    u32  id = 0;                // stable identity across frames (e.g. entity index + 1); 0 = invalid
+    Vec3 position{ 0.0f };      // capture point
+    Vec3 box_min{ 0.0f };       // influence + projection box (world, axis-aligned)
+    Vec3 box_max{ 0.0f };
+    f32  intensity = 1.0f;
+    f32  blend_distance = 1.0f; // metres over which the probe fades in from the box faces
+};
+
 // The frame's complete render input. Rebuilt (or double-buffered) each frame.
 struct RenderScene {
     RenderView                      view{};
     EnvironmentSettings             environment{};
     GiVolume                        gi{};           // ADR-0016
+    std::vector<ReflectionProbe>    reflection_probes; // ADR-0017 (<= 8 are used)
     std::vector<RenderMeshInstance> instances;
     std::vector<RenderLight>        lights;
     std::vector<RenderLine>         debug_lines;
@@ -106,6 +120,7 @@ struct RenderScene {
         lights.clear();
         debug_lines.clear();
         joint_matrices.clear();
+        reflection_probes.clear();
     }
 };
 

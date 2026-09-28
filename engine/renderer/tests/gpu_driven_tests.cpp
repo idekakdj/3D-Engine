@@ -534,3 +534,79 @@ TEST_CASE("GI volume: round-robin probe captures, clamps, reset and switches (AD
         MESSAGE(e);
     }
 }
+
+TEST_CASE("reflection probes: slots, one capture per frame, realtime, removal (ADR-0017)") {
+    Fixture     f(true);
+    RenderScene s = f.scene(40);
+    f.frame(s);
+    CHECK(f.r->stats().reflection_probes == 0);
+    CHECK_FALSE(f.logged("Refl.Capture"));
+
+    auto probe = [](u32 id, Vec3 c, f32 half) {
+        ReflectionProbe p;
+        p.id = id;
+        p.position = c;
+        p.box_min = c - Vec3(half);
+        p.box_max = c + Vec3(half);
+        return p;
+    };
+    s.reflection_probes = { probe(1, Vec3(0.0f), 10.0f), probe(2, Vec3(5.0f, 0.0f, 0.0f), 3.0f) };
+    f.device.state.log.clear();
+    const u32 dispatches = f.device.state.dispatches;
+    f.frame(s);
+    CHECK(f.r->stats().reflection_probes == 2);
+    CHECK(f.r->stats().reflection_captures == 1); // at most one capture per frame
+    CHECK(f.logged("Refl.Capture"));
+    CHECK(f.logged("Refl.Filter"));
+    CHECK(f.device.state.dispatches > dispatches); // resolve + mips + prefilter
+
+    // Realtime off: once both are captured, nothing is captured until a probe moves.
+    f.r->settings().reflection_realtime = false;
+    f.frame(s); // second probe's first capture
+    CHECK(f.r->stats().reflection_captures == 1);
+    f.frame(s);
+    CHECK(f.r->stats().reflection_captures == 0);
+    s.reflection_probes[1].position.y += 1.0f;
+    f.frame(s);
+    CHECK(f.r->stats().reflection_captures == 1);
+    f.frame(s);
+    CHECK(f.r->stats().reflection_captures == 0);
+    f.r->settings().reflection_realtime = true;
+    f.frame(s);
+    CHECK(f.r->stats().reflection_captures == 1);
+
+    // Invalid ids / degenerate boxes are ignored; at most kMaxReflectionProbes are used.
+    RenderScene many = s;
+    many.reflection_probes.clear();
+    for (u32 i = 0; i < 12; ++i) {
+        many.reflection_probes.push_back(probe(100 + i, Vec3(f32(i), 0.0f, 0.0f), 1.0f));
+    }
+    many.reflection_probes.push_back(probe(0, Vec3(0.0f), 1.0f));
+    ReflectionProbe flat = probe(500, Vec3(0.0f), 1.0f);
+    flat.box_max.y = flat.box_min.y;
+    many.reflection_probes.insert(many.reflection_probes.begin(), flat);
+    f.frame(many);
+    CHECK(f.r->stats().reflection_probes == kMaxReflectionProbes);
+
+    // Size change re-creates the cubes; removal and the switch free everything.
+    f.r->settings().reflection_probe_size = 64;
+    f.frame(s);
+    CHECK(f.r->stats().reflection_probes == 2);
+    CHECK(f.r->stats().reflection_captures == 1);
+    s.reflection_probes.clear();
+    f.frame(s);
+    CHECK(f.r->stats().reflection_probes == 0);
+    s.reflection_probes = { probe(7, Vec3(0.0f), 4.0f) };
+    f.r->settings().reflection_probes = false;
+    f.device.state.log.clear();
+    f.frame(s);
+    CHECK(f.r->stats().reflection_probes == 0);
+    CHECK_FALSE(f.logged("Refl.Capture"));
+    for (int i = 0; i < 4; ++i) {
+        f.frame(s); // let deferred releases run
+    }
+    CHECK(f.device.state.errors.empty());
+    for (const std::string& e : f.device.state.errors) {
+        MESSAGE(e);
+    }
+}

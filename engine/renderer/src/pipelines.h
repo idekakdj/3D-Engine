@@ -75,6 +75,8 @@ enum class PipelineId : u32 {
     HiZBuild,    // ADR-0009: reverse-Z min depth pyramid
     PickResolve, // ADR-0009: id buffer texel -> counter buffer
     GiProject,   // ADR-0016: captured probe faces -> L1 SH irradiance
+    ReflResolve,    // ADR-0017: captured faces -> reflection probe cube mip 0
+    CubeDownsample, // ADR-0017: cube mip chain (2x2 box)
     Tonemap,    // per target format
     DebugLines, // per target format
     Count

@@ -16,6 +16,7 @@
 #include "shadows.glsl"
 #include "clusters.glsl"
 #include "gi.glsl"
+#include "reflections.glsl"
 
 layout(location = 0) in vec3 v_world_pos;
 layout(location = 1) in vec3 v_normal;
@@ -152,6 +153,11 @@ void main() {
         float ratio = clamp(ae_luminance(gi_irradiance) / max(ae_luminance(env_irradiance), 1e-4), 0.0, 1.0);
         indirect_specular *= mix(1.0, ratio, gi_w);
     }
+    // ADR-0017: reflection probes replace the sky reflection inside their boxes.
+    float sky_weight;
+    vec3  probe_reflection = ae_probe_reflection(frame, v_world_pos, reflect(-V, N), perceptual_roughness, sky_weight);
+    indirect_specular = probe_reflection + indirect_specular * sky_weight;
+    vec3 reflection = indirect_specular; // for the debug view
     vec3 indirect_diffuse = diffuse_color * irradiance;
     indirect_diffuse *= (1.0 - spec_weight);
     indirect_specular *= spec_weight * energy_comp;
@@ -169,6 +175,7 @@ void main() {
         else if (dv == AE_DEBUG_AO) d = vec3(ao);
         else if (dv == AE_DEBUG_EMISSIVE) d = emissive;
         else if (dv == AE_DEBUG_GI) d = irradiance;
+        else if (dv == AE_DEBUG_REFLECTIONS) d = reflection;
         else if (dv == AE_DEBUG_LIGHT_COMPLEXITY) d = ae_heatmap(float(count + frame.directional_count) / 32.0);
         else if (dv == AE_DEBUG_SHADOW_CASCADES) {
             d = frame.cascade_count > 0u && view_z < frame.shadow_distance

@@ -569,6 +569,19 @@ renderer::GiVolume gi_volume_from(const Mat4& world, const GIVolumeComponent& vo
     return out;
 }
 
+renderer::ReflectionProbe reflection_probe_from(const Mat4& world, const ReflectionProbeComponent& probe, u32 id) {
+    renderer::ReflectionProbe out;
+    const Vec3 size(glm::length(Vec3(world[0])), glm::length(Vec3(world[1])), glm::length(Vec3(world[2])));
+    const Vec3 centre(world[3]);
+    out.id = id;
+    out.position = centre;
+    out.box_min = centre - size * 0.5f;
+    out.box_max = centre + size * 0.5f;
+    out.intensity = std::max(probe.intensity, 0.0f);
+    out.blend_distance = std::max(probe.blend_distance, 0.0f);
+    return out;
+}
+
 renderer::RenderView make_render_view(const Mat4& camera_world, f32 fov_y_radians, f32 near_z, f32 far_z,
                                       UVec2 viewport) {
     // Rigid part of the camera transform (normalised axes; scale must not skew the view).
@@ -633,6 +646,15 @@ SceneExtractStats extract_render_scene(const World& world, RenderResourceCache& 
         if (out.gi.enabled) {
             break;
         }
+    }
+
+    // ---- reflection probes (ADR-0017) ---------------------------------------------------------
+    for (const auto [e, rp] : reg.view<const gameplay::ReflectionProbeComponent>().each()) {
+        if (!rp.enabled || !scene::is_visible_in_hierarchy(world, e)) {
+            continue;
+        }
+        out.reflection_probes.push_back(
+            reflection_probe_from(world_matrix(e), rp, static_cast<u32>(entt::to_entity(e)) + 1u));
     }
 
     // ---- lights ------------------------------------------------------------------------------

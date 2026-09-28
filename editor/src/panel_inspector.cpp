@@ -378,6 +378,26 @@ void EditorApp::draw_inspector() {
             defer_commit("Remove GI Volume");
         }
     }
+    if (auto* rp = w.try_get<gameplay::ReflectionProbeComponent>(e);
+        shown(rp, std::type_identity<gameplay::ReflectionProbeComponent>{})) {
+        const gameplay::ReflectionProbeComponent before = *rp;
+        bool                                     remove = false;
+        if (component_header("Reflection Probe", &remove)) {
+            with("Probe enabled").toggle(ImGui::Checkbox("Enabled##refl", &rp->enabled));
+            with("Probe intensity").drag(ImGui::DragFloat("Intensity##refl", &rp->intensity, 0.01f, 0.0f, 10.0f));
+            with("Probe blend").drag(ImGui::DragFloat("Blend distance", &rp->blend_distance, 0.02f, 0.0f, 20.0f, "%.2f m"));
+            ImGui::TextDisabled("captured at the entity's position; box = its scale");
+        }
+        if (multi) {
+            propagate_fields(w, before, *rp, others, &gameplay::ReflectionProbeComponent::enabled,
+                             &gameplay::ReflectionProbeComponent::intensity,
+                             &gameplay::ReflectionProbeComponent::blend_distance);
+        }
+        if (remove) {
+            remove_all<gameplay::ReflectionProbeComponent>(w, sel);
+            defer_commit("Remove Reflection Probe");
+        }
+    }
     if (auto* fc = w.try_get<gameplay::FlyCameraComponent>(e); shown(fc, std::type_identity<gameplay::FlyCameraComponent>{})) {
         const gameplay::FlyCameraComponent before = *fc;
         bool                               remove = false;
@@ -672,6 +692,8 @@ void EditorApp::draw_inspector() {
         item("Camera", std::type_identity<CameraComponent>{}, [&](Entity x) { w.add<CameraComponent>(x); });
         item("GI Volume", std::type_identity<gameplay::GIVolumeComponent>{},
              [&](Entity x) { w.add<gameplay::GIVolumeComponent>(x); });
+        item("Reflection Probe", std::type_identity<gameplay::ReflectionProbeComponent>{},
+             [&](Entity x) { w.add<gameplay::ReflectionProbeComponent>(x); });
         item("Fly Camera Controller", std::type_identity<gameplay::FlyCameraComponent>{},
              [&](Entity x) { w.add<gameplay::FlyCameraComponent>(x); });
         ImGui::Separator();

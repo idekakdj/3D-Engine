@@ -1001,6 +1001,274 @@ bool RendererImpl::ensure_gi_resources(u32 probes) {
     return true;
 }
 
+// ===========================================================================
+// Reflection capture probes (ADR-0017)
+// ===========================================================================
+void RendererImpl::release_refl_slot(ReflSlot& s, bool deferred) {
+    auto release = [dev = &device_, env = s.env, pre = s.pre, env_sampled = s.env_sampled,
+                    pre_sampled = s.pre_sampled, env_views = s.env_views, pre_views = s.pre_views] {
+        for (rhi::DescriptorHandle h : { env_sampled, pre_sampled }) {
+            if (h.is_valid()) {
+                dev->unregister_texture(h);
+            }
+        }
+        for (const auto* views : { &env_views, &pre_views }) {
+            for (rhi::DescriptorHandle h : *views) {
+                if (h.is_valid()) {
+                    dev->unregister_storage_texture(h);
+                }
+            }
+        }
+        for (rhi::TextureHandle t : { env, pre }) {
+            if (t.is_valid()) {
+                dev->destroy(t);
+            }
+        }
+    };
+    if (deferred) {
+        defer_release(std::move(release)); // descriptors may still be used by in-flight frames
+    } else {
+        release();
+    }
+    s = ReflSlot{};
+}
+
+bool RendererImpl::ensure_refl_slot(ReflSlot& s, u32 size) {
+    if (s.env.is_valid() && s.size == size) {
+        return true;
+    }
+    const u32 id = s.id;
+    release_refl_slot(s, true);
+    s.id = id;
+    s.seen = true; // (re)created for a probe of this frame
+    s.size = size;
+    s.env_mips = full_mip_count(size, size);
+    s.pre_mips = std::min(kPrefilteredMips, s.env_mips);
+    rhi::TextureDesc d;
+    d.type = rhi::TextureType::Cube;
+    d.format = rhi::Format::RGBA16F;
+    d.width = size;
+    d.height = size;
+    d.array_layers = 6;
+    d.usage = rhi::TextureUsage::Sampled | rhi::TextureUsage::Storage;
+    d.mip_levels = s.env_mips;
+    d.debug_name = "Refl.Environment";
+    s.env = device_.create_texture(d);
+    d.mip_levels = s.pre_mips;
+    d.debug_name = "Refl.Prefiltered";
+    s.pre = device_.create_texture(d);
+    bool ok = s.env.is_valid() && s.pre.is_valid();
+    if (ok) {
+        s.env_sampled = device_.register_texture(s.env, linear_clamp_);
+        s.pre_sampled = device_.register_texture(s.pre, linear_clamp_);
+        for (u32 m = 0; m < s.env_mips; ++m) {
+            s.env_views.push_back(device_.register_storage_texture(s.env, m));
+        }
+        for (u32 m = 0; m < s.pre_mips; ++m) {
+            s.pre_views.push_back(device_.register_storage_texture(s.pre, m));
+        }
+        auto valid = [](rhi::DescriptorHandle h) { return h.is_valid(); };
+        ok = s.env_sampled.is_valid() && s.pre_sampled.is_valid() &&
+             std::all_of(s.env_views.begin(), s.env_views.end(), valid) &&
+             std::all_of(s.pre_views.begin(), s.pre_views.end(), valid);
+    }
+    if (!ok) {
+        AE_LOG_ERROR("Renderer", "reflection probe cube creation failed ({}^2)", size);
+        release_refl_slot(s, true);
+        s.id = id;
+        s.seen = true;
+        return false;
+    }
+    s.captured = false;
+    s.dirty = true;
+    return true;
+}
+
+bool RendererImpl::ensure_refl_capture(u32 size) {
+    if (refl_capture_color_.texture.is_valid() && refl_capture_color_.size.x == size) {
+        return refl_capture_depth_.texture.is_valid();
+    }
+    destroy_persistent(refl_capture_color_);
+    destroy_persistent(refl_capture_depth_);
+    rhi::TextureDesc d;
+    d.type = rhi::TextureType::Tex2DArray;
+    d.width = size;
+    d.height = size;
+    d.array_layers = kPointShadowFaces;
+    d.format = kHdrFormat;
+    d.usage = rhi::TextureUsage::ColorAttach | rhi::TextureUsage::Sampled;
+    d.debug_name = "Refl.Capture";
+    refl_capture_color_.texture = device_.create_texture(d);
+    d.format = kDepthFormat;
+    d.usage = rhi::TextureUsage::DepthAttach;
+    d.debug_name = "Refl.CaptureDepth";
+    refl_capture_depth_.texture = device_.create_texture(d);
+    if (!refl_capture_color_.texture.is_valid() || !refl_capture_depth_.texture.is_valid()) {
+        destroy_persistent(refl_capture_color_);
+        destroy_persistent(refl_capture_depth_);
+        return false;
+    }
+    refl_capture_color_.sampled = device_.register_texture(refl_capture_color_.texture, point_clamp_);
+    for (PersistentTexture* t : { &refl_capture_color_, &refl_capture_depth_ }) {
+        t->size = UVec2(size);
+        t->layers = kPointShadowFaces;
+        t->state = rhi::ResourceState::Undefined;
+    }
+    return true;
+}
+
+void RendererImpl::setup_reflections(const RenderScene& scene) {
+    refl_update_ = -1;
+    refl_views_.clear();
+    refl_order_.clear();
+    stats_.reflection_probes = 0;
+    stats_.reflection_captures = 0;
+    const bool on = settings_.reflection_probes && pipelines_->valid(PipelineId::ReflResolve) &&
+                    pipelines_->valid(PipelineId::CubeDownsample) && pipelines_->valid(PipelineId::Prefilter) &&
+                    pipelines_->get(mesh_pipeline_index(MeshPass::GiCapture, false, false, false)).is_valid();
+    // Valid probes of this frame (first kMaxReflectionProbes with an id and a non-empty box).
+    std::vector<const ReflectionProbe*> probes;
+    if (on) {
+        for (const ReflectionProbe& p : scene.reflection_probes) {
+            const Vec3 e = glm::abs(p.box_max - p.box_min);
+            if (p.id != 0 && e.x > 1e-3f && e.y > 1e-3f && e.z > 1e-3f && probes.size() < kMaxReflectionProbes &&
+                std::none_of(probes.begin(), probes.end(), [&](const ReflectionProbe* q) { return q->id == p.id; })) {
+                probes.push_back(&p);
+            }
+        }
+    }
+    // Free the slots of probes that disappeared first, so new probes get a slot this frame.
+    for (ReflSlot& s : refl_) {
+        s.seen = false;
+        if (s.id != 0 && std::none_of(probes.begin(), probes.end(), [&](const ReflectionProbe* q) { return q->id == s.id; })) {
+            release_refl_slot(s, true);
+        }
+    }
+    if (on) {
+        const u32 size = std::bit_ceil(std::clamp(settings_.reflection_probe_size, 32u, 512u));
+        u32       used = 0;
+        for (const ReflectionProbe* pp : probes) {
+            const ReflectionProbe& p = *pp;
+            const Vec3 lo = glm::min(p.box_min, p.box_max);
+            const Vec3 hi = glm::max(p.box_min, p.box_max);
+            ReflSlot* slot = nullptr;
+            for (ReflSlot& s : refl_) {
+                if (s.id == p.id) {
+                    slot = &s;
+                    break;
+                }
+            }
+            for (u32 i = 0; slot == nullptr && i < kMaxReflectionProbes; ++i) {
+                if (refl_[i].id == 0) {
+                    slot = &refl_[i];
+                    slot->id = p.id;
+                }
+            }
+            if (slot == nullptr) {
+                continue;
+            }
+            slot->seen = true;
+            if (!ensure_refl_slot(*slot, size)) {
+                continue;
+            }
+            if (slot->position != p.position || slot->box_min != lo || slot->box_max != hi) {
+                slot->dirty = true; // moved / resized: re-capture from the new point
+            }
+            slot->position = p.position;
+            slot->box_min = lo;
+            slot->box_max = hi;
+            slot->intensity = std::max(p.intensity, 0.0f);
+            slot->blend = std::max(p.blend_distance, 0.0f);
+            ++used;
+        }
+        stats_.reflection_probes = used;
+    }
+    if (!on || stats_.reflection_probes == 0 || !ensure_refl_capture(refl_[0].size != 0 ? refl_[0].size : 128u)) {
+        return;
+    }
+    // One capture per frame: a dirty probe first, else (realtime) the next one round-robin.
+    for (u32 i = 0; i < kMaxReflectionProbes && refl_update_ < 0; ++i) {
+        if (refl_[i].id != 0 && refl_[i].env.is_valid() && refl_[i].dirty) {
+            refl_update_ = static_cast<i32>(i);
+        }
+    }
+    if (refl_update_ < 0 && settings_.reflection_realtime) {
+        for (u32 k = 0; k < kMaxReflectionProbes; ++k) {
+            const u32 i = (refl_cursor_ + k) % kMaxReflectionProbes;
+            if (refl_[i].id != 0 && refl_[i].env.is_valid()) {
+                refl_update_ = static_cast<i32>(i);
+                refl_cursor_ = i + 1;
+                break;
+            }
+        }
+    }
+    if (refl_update_ >= 0) {
+        ReflSlot& s = refl_[static_cast<u32>(refl_update_)];
+        if (refl_capture_color_.size.x != s.size && !ensure_refl_capture(s.size)) {
+            refl_update_ = -1;
+        } else {
+            const f32  near_z = 0.05f;
+            const f32  far_z = std::max(200.0f, 4.0f * glm::length(s.box_max - s.box_min));
+            const Mat4 proj = to_reverse_z(perspective(90.0f * kDeg2Rad, 1.0f, near_z, far_z), near_z);
+            for (u32 f = 0; f < kPointShadowFaces; ++f) {
+                const PointShadowFace face = point_shadow_face(f);
+                SpotShadowSetup       v;
+                v.view_proj = proj * look_at(s.position, s.position + face.forward, face.up);
+                v.frustum = extract_frustum(v.view_proj, true, false);
+                v.layer = f;
+                refl_views_.push_back(v);
+            }
+            s.dirty = false;
+            s.captured = true; // this frame's forward pass already sees the new capture
+            stats_.reflection_captures = 1;
+        }
+    }
+    for (u32 i = 0; i < kMaxReflectionProbes; ++i) {
+        if (refl_[i].id != 0 && refl_[i].captured) {
+            refl_order_.push_back(i);
+        }
+    }
+    auto volume = [this](u32 i) {
+        const Vec3 e = refl_[i].box_max - refl_[i].box_min;
+        return e.x * e.y * e.z;
+    };
+    std::stable_sort(refl_order_.begin(), refl_order_.end(), [&](u32 a, u32 b) { return volume(a) < volume(b); });
+}
+
+void RendererImpl::cull_reflections(const RenderScene& scene) {
+    for (auto& l : refl_draws_) {
+        l.clear();
+    }
+    if (refl_views_.empty()) {
+        return;
+    }
+    for (u32 i = 0; i < resolved_.size(); ++i) {
+        const ResolvedInstance& r = resolved_[i];
+        if (!r.valid || r.blend == static_cast<u8>(BlendMode::Translucent)) {
+            continue;
+        }
+        const bool never_cull = instance_flags::has(scene.instances[i].flags, instance_flags::kNeverCull);
+        DrawItem d;
+        d.instance = i;
+        d.first_index = r.first_index;
+        d.index_count = r.index_count;
+        d.vertex_offset = r.vertex_offset;
+        d.skin_arena = r.skin_arena;
+        d.skinned = r.skinned;
+        d.double_sided = r.double_sided;
+        d.pipeline = mesh_pipeline_index(MeshPass::GiCapture, r.skinned, false, false);
+        d.key = (static_cast<u64>(d.pipeline) << 40) | (static_cast<u64>(d.skin_arena) << 32) | r.material;
+        for (u32 v = 0; v < refl_views_.size(); ++v) {
+            if (never_cull || frustum_intersects_aabb(refl_views_[v].frustum, r.bounds)) {
+                refl_draws_[v].push_back(d);
+            }
+        }
+    }
+    for (auto& l : refl_draws_) {
+        std::sort(l.begin(), l.end(), [](const DrawItem& a, const DrawItem& b) { return a.key < b.key; });
+    }
+}
+
 void RendererImpl::ensure_history() {
     if (history_[0].texture.is_valid() && history_[0].size == output_size_) {
         return;
@@ -1166,7 +1434,8 @@ void RendererImpl::render(const RenderScene& scene, rhi::CommandList& cmd, const
                       FrameArena::padded(std::max<usize>(n_inst, 1) * sizeof(u32)) +
                       FrameArena::padded(kMaxViewTableEntries * sizeof(GpuSpotShadow)) +
                       FrameArena::padded(kMaxGiProbesPerFrame * sizeof(u32)) +
-                      FrameArena::kAlignment * 14;
+                      FrameArena::padded(kMaxReflectionProbes * sizeof(GpuReflectionProbe)) +
+                      FrameArena::kAlignment * 15;
     if (!frame_arena_.begin_frame(slot, bytes)) {
         cmd.pop_debug_group();
         return;
@@ -1182,9 +1451,10 @@ void RendererImpl::render(const RenderScene& scene, rhi::CommandList& cmd, const
     const auto a_uid = frame_arena_.allocate_array<u32>(std::max<usize>(n_inst, 1));
     const auto a_spot = frame_arena_.allocate_array<GpuSpotShadow>(kMaxViewTableEntries);
     const auto a_gi_slots = frame_arena_.allocate_array<u32>(kMaxGiProbesPerFrame);
+    const auto a_refl = frame_arena_.allocate_array<GpuReflectionProbe>(kMaxReflectionProbes);
     if (!a_frame.valid() || !a_inst.valid() || !a_mat.valid() || !a_light.valid() || !a_joint.valid() ||
         !a_line.valid() || !a_cull.valid() || !a_cull_view.valid() || !a_uid.valid() || !a_spot.valid() ||
-        !a_gi_slots.valid()) {
+        !a_gi_slots.valid() || !a_refl.valid()) {
         cmd.pop_debug_group();
         return;
     }
@@ -1199,6 +1469,8 @@ void RendererImpl::render(const RenderScene& scene, rhi::CommandList& cmd, const
     cull_spot_shadows(scene);
     setup_gi(scene);
     cull_gi(scene);
+    setup_reflections(scene);
+    cull_reflections(scene);
     if (gpu_.active) {
         write_cull_data(static_cast<GpuCullInstance*>(a_cull.cpu), static_cast<GpuCullView*>(a_cull_view.cpu));
         gpu_.candidates_gpu = a_cull.gpu;
@@ -1268,6 +1540,33 @@ void RendererImpl::render(const RenderScene& scene, rhi::CommandList& cmd, const
         frame.gi_inv_spacing = Vec3(1.0f) / spacing;
         frame.gi_normal_bias = 0.25f * std::min({ spacing.x, spacing.y, spacing.z });
         frame.gi_counts = gi_.counts;
+    }
+    if (!refl_views_.empty()) { // ADR-0017: this frame's capture views follow the GI views
+        auto* dst = static_cast<GpuSpotShadow*>(a_spot.cpu) + kReflViewBase;
+        for (u32 i = 0; i < refl_views_.size(); ++i) {
+            GpuSpotShadow g;
+            g.view_proj = refl_views_[i].view_proj;
+            std::memcpy(&dst[i], &g, sizeof(GpuSpotShadow));
+        }
+        frame.spot_shadows = a_spot.gpu;
+    }
+    frame.reflection_probes = a_refl.gpu; // always valid memory (see reflections.glsl)
+    if (!refl_order_.empty()) {
+        auto* dst = static_cast<GpuReflectionProbe*>(a_refl.cpu);
+        for (u32 i = 0; i < refl_order_.size(); ++i) {
+            const ReflSlot&    s = refl_[refl_order_[i]];
+            GpuReflectionProbe g;
+            g.box_min = s.box_min;
+            g.box_max = s.box_max;
+            g.intensity = s.intensity;
+            g.blend_distance = s.blend;
+            g.position = s.position;
+            g.cube = didx(s.pre_sampled);
+            g.mips = s.pre_mips;
+            std::memcpy(&dst[i], &g, sizeof(GpuReflectionProbe));
+        }
+        frame.reflection_probes = a_refl.gpu;
+        frame.reflection_probe_count = static_cast<u32>(refl_order_.size());
     }
     std::memcpy(a_frame.cpu, &frame, sizeof(GpuFrame));
     frame_gpu_address_ = a_frame.gpu;
@@ -1514,6 +1813,96 @@ void RendererImpl::build_graph(const RenderScene& scene, const RenderTarget& tar
                 p.view_base = kMaxLocalShadowViews;
                 ctx.cmd.push_constants(rhi::ShaderStage::Compute, 0, sizeof(p), &p);
                 ctx.cmd.dispatch(static_cast<u32>(gi_.slots.size()), 1, 1);
+            });
+    }
+
+    // ---- reflection probe capture: faces -> cube -> mips -> GGX prefilter (ADR-0017) ----
+    // The probe textures are persistent and fully transitioned inside this one pass (captured probe:
+    // ShaderRead again at the end), so the graph only orders it before the lighting.
+    if (refl_update_ >= 0) {
+        g.add_pass("Refl.Update")
+            .read(gi_probes, rhi::ResourceState::ShaderRead)
+            .read(shadow, rhi::ResourceState::ShaderRead)
+            .read(spot_shadow, rhi::ResourceState::ShaderRead)
+            .read(point_shadow, rhi::ResourceState::ShaderRead)
+            .side_effect()
+            .execute([this, frame_addr](RGContext& ctx) {
+                rhi::CommandList& cmd = ctx.cmd;
+                ReflSlot&         s = refl_[static_cast<u32>(refl_update_)];
+                const UVec2       cs = refl_capture_color_.size;
+                cmd.push_debug_group("Refl.Capture");
+                cmd.barrier(refl_capture_color_.texture, refl_capture_color_.state, rhi::ResourceState::ColorAttachment);
+                cmd.barrier(refl_capture_depth_.texture, refl_capture_depth_.state,
+                            rhi::ResourceState::DepthStencilAttachment);
+                for (u32 f = 0; f < refl_views_.size(); ++f) {
+                    rhi::RenderingInfo   ri;
+                    rhi::ColorAttachment ca;
+                    ri.render_area = cs;
+                    ca.texture = refl_capture_color_.texture;
+                    ca.layer = f;
+                    ca.clear_color = Vec4(0.0f); // alpha 0 = sky
+                    ri.color.push_back(ca);
+                    ri.has_depth = true;
+                    ri.depth.texture = refl_capture_depth_.texture;
+                    ri.depth.layer = f;
+                    ri.depth.store = rhi::StoreOp::DontCare;
+                    ri.depth.clear_depth = 0.0f;
+                    cmd.begin_rendering(ri);
+                    cmd.set_viewport(full_viewport(cs));
+                    cmd.set_scissor(full_scissor(cs));
+                    MeshPush push;
+                    push.frame = frame_addr;
+                    push.view_index = 1 + kMaxCascades + kReflViewBase + f;
+                    draw_items(cmd, refl_draws_[f], push, false);
+                    cmd.end_rendering();
+                }
+                cmd.barrier(refl_capture_color_.texture, rhi::ResourceState::ColorAttachment, rhi::ResourceState::ShaderRead);
+                refl_capture_color_.state = rhi::ResourceState::ShaderRead;
+                refl_capture_depth_.state = rhi::ResourceState::DepthStencilAttachment;
+                cmd.pop_debug_group();
+
+                cmd.push_debug_group("Refl.Filter");
+                // Freshly (re)created cubes start Undefined; captured ones were left in ShaderRead.
+                const rhi::ResourceState from = s.written ? rhi::ResourceState::ShaderRead : rhi::ResourceState::Undefined;
+                s.written = true;
+                cmd.barrier(s.env, from, rhi::ResourceState::ShaderWrite);
+                cmd.bind_pipeline(pipelines_->get(PipelineId::ReflResolve));
+                ReflResolvePush rp;
+                rp.frame = frame_addr;
+                rp.capture_tex = didx(refl_capture_color_.sampled);
+                rp.dst_img = didx(s.env_views[0]);
+                rp.size = s.size;
+                rp.view_base = kReflViewBase;
+                rp.position = s.position;
+                cmd.push_constants(rhi::ShaderStage::Compute, 0, sizeof(rp), &rp);
+                cmd.dispatch(groups(s.size, 8), groups(s.size, 8), 6);
+                cmd.bind_pipeline(pipelines_->get(PipelineId::CubeDownsample));
+                for (u32 m = 1; m < s.env_mips; ++m) {
+                    cmd.barrier(s.env, rhi::ResourceState::ShaderWrite, rhi::ResourceState::ShaderWrite);
+                    CubeDownsamplePush dp;
+                    dp.src_img = didx(s.env_views[m - 1]);
+                    dp.dst_img = didx(s.env_views[m]);
+                    dp.dst_size = std::max(1u, s.size >> m);
+                    cmd.push_constants(rhi::ShaderStage::Compute, 0, sizeof(dp), &dp);
+                    cmd.dispatch(groups(dp.dst_size, 8), groups(dp.dst_size, 8), 6);
+                }
+                cmd.barrier(s.env, rhi::ResourceState::ShaderWrite, rhi::ResourceState::ShaderRead);
+                cmd.barrier(s.pre, from, rhi::ResourceState::ShaderWrite);
+                cmd.bind_pipeline(pipelines_->get(PipelineId::Prefilter));
+                for (u32 m = 0; m < s.pre_mips; ++m) {
+                    IblPush p;
+                    p.src_tex = didx(s.env_sampled);
+                    p.dst_img = didx(s.pre_views[m]);
+                    p.dst_size = std::max(1u, s.size >> m);
+                    p.roughness = s.pre_mips > 1 ? static_cast<f32>(m) / static_cast<f32>(s.pre_mips - 1) : 0.0f;
+                    p.sample_count = m == 0 ? 1u : 64u;
+                    p.src_size = s.size;
+                    p.src_mips = s.env_mips;
+                    cmd.push_constants(rhi::ShaderStage::Compute, 0, sizeof(p), &p);
+                    cmd.dispatch(groups(p.dst_size, 8), groups(p.dst_size, 8), 6);
+                }
+                cmd.barrier(s.pre, rhi::ResourceState::ShaderWrite, rhi::ResourceState::ShaderRead);
+                cmd.pop_debug_group();
             });
     }
 

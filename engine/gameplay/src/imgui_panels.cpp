@@ -83,9 +83,20 @@ void draw_engine_stats(Application& app, bool* open) {
             ImGui::SameLine();
             ImGui::TextDisabled("%u probes", rs.gi_probes);
         }
+        // ADR-0017: reflection probes (Create > Reflection Probe).
+        ImGui::Checkbox("Reflection probes", &settings.reflection_probes);
+        if (settings.reflection_probes) {
+            ImGui::SameLine();
+            ImGui::Checkbox("real-time", &settings.reflection_realtime);
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("Re-capture one probe every frame so moving objects appear in reflections");
+            }
+            ImGui::SameLine();
+            ImGui::TextDisabled("%u probes", rs.reflection_probes);
+        }
         static const char* kViews[] = { "Lit",      "Albedo",           "Normals",         "Roughness",
                                         "Metallic", "Ambient occlusion", "Emissive",        "Light complexity",
-                                        "Shadow cascades", "Overdraw",   "Global illumination" };
+                                        "Shadow cascades", "Overdraw",   "Global illumination", "Reflections" };
         int view = static_cast<int>(settings.debug_view);
         ImGui::SetNextItemWidth(180.0f);
         if (ImGui::Combo("View", &view, kViews, IM_ARRAYSIZE(kViews))) {

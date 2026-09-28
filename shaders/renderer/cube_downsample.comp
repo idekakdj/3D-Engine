@@ -1,0 +1,26 @@
+// shaders/renderer/cube_downsample.comp — one cube mip from the previous one (2x2 box filter, per
+// face; ADR-0017). Dispatched per mip, z = face.
+#version 460
+#extension GL_GOOGLE_include_directive : require
+#include "common/bindless.glsl"
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(push_constant, scalar) uniform CubeDownsamplePush {
+    uint src_img;
+    uint dst_img;
+    uint dst_size;
+    uint pad;
+} pc;
+
+void main() {
+    uvec3 id = gl_GlobalInvocationID;
+    if (id.x >= pc.dst_size || id.y >= pc.dst_size || id.z >= 6u) {
+        return;
+    }
+    ivec3 s = ivec3(id.xy * 2u, id.z);
+    vec4 c = imageLoad(ae_img2darray_rgba16f[pc.src_img], s) + imageLoad(ae_img2darray_rgba16f[pc.src_img], s + ivec3(1, 0, 0)) +
+             imageLoad(ae_img2darray_rgba16f[pc.src_img], s + ivec3(0, 1, 0)) +
+             imageLoad(ae_img2darray_rgba16f[pc.src_img], s + ivec3(1, 1, 0));
+    imageStore(ae_img2darray_rgba16f[pc.dst_img], ivec3(id), c * 0.25);
+}

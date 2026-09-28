@@ -481,6 +481,16 @@ bool register_gameplay_codecs(World& world) {
                    read(j, "enabled", c.enabled);
         });
 
+    ok &= add_codec<ReflectionProbeComponent>(
+        world, "ReflectionProbe",
+        [](const World&, const ReflectionProbeComponent& c) {
+            return json{ { "intensity", c.intensity }, { "blend_distance", c.blend_distance }, { "enabled", c.enabled } };
+        },
+        [](const World&, const json& j, ReflectionProbeComponent& c) {
+            return read(j, "intensity", c.intensity) && read(j, "blend_distance", c.blend_distance) &&
+                   read(j, "enabled", c.enabled);
+        });
+
     ok &= add_codec<MaterialOverridesComponent>(
         world, "MaterialOverrides",
         [](const World&, const MaterialOverridesComponent& c) {

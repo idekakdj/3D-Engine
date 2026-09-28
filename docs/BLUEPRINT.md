@@ -4,7 +4,7 @@
 > across rendering fidelity, editor/tooling, physics/animation, and scripting/gameplay.
 >
 > **Status:** Foundation phase (multi-session project). **Author:** Engine architect (orchestrator).
-> **Doc version:** 1.16 (ADR-0016 applied). Update this header on every material revision.
+> **Doc version:** 1.17 (ADR-0017 applied). Update this header on every material revision.
 
 ---
 
@@ -555,6 +555,7 @@ until it builds and its acceptance check passes.
 - **v1.14** — ADR-0014: application identity (icon, version info, splash), File > New / Open Project, precompiled shaders.
 - **v1.15** — ADR-0015: point-light shadows (six-view cube shadows sharing the spot-shadow path).
 - **v1.16** — ADR-0016: dynamic diffuse global illumination (irradiance probe volume, GI Volume component).
+- **v1.17** — ADR-0017: reflection capture probes (box-projected prefiltered cubemaps, Reflection Probe component).
 
 ---
 
@@ -1319,3 +1320,64 @@ selection outline was drawn light blue instead of yellow (R and B swapped in the
 **Not done yet:** probe relocation out of walls and
 per-probe visibility (depth moments) to remove the remaining leaks; several volumes at once and
 rotated volumes; GI for translucent capture; baking a volume to disk for static scenes.
+
+## ADR-0017 — Reflections: box-projected reflection capture probes (2026-09-28)
+
+**Status:** accepted; verified on Linux (llvmpipe). Third of the owner's "Unreal-style" features.
+
+**Context.** Specular reflections came only from the sky (IBL prefiltered cube) or the flat ambient:
+a polished floor indoors mirrored the sky, and metals looked wrong in any enclosed space. Screen-space
+reflections need a normal / roughness buffer the forward renderer does not have, and cannot show
+what is off screen; hardware ray tracing is unavailable on the verification device. Unreal's
+answer for the same problem is the (box) reflection capture.
+
+**Decisions**
+1. **Probes.** `RenderScene::reflection_probes` (additive; `ReflectionProbe` = stable id, capture
+   position, axis-aligned box, intensity, blend distance). The renderer keeps up to 8 persistent
+   slots keyed by id (`kMaxReflectionProbes`); a slot owns an RGBA16F environment cube (full mips)
+   and a GGX-prefiltered cube (`kPrefilteredMips`), both `reflection_probe_size`^2 (default 128).
+   Slots of probes that disappear are released (deferred past in-flight frames) before new probes
+   are assigned.
+2. **Capture, one probe per frame.** A dirty probe (new, moved, resized) is captured first; with
+   `reflection_realtime` (default on) one probe per frame is re-captured round-robin, so moving
+   objects appear in reflections. The capture renders six 90-degree faces with the GI capture
+   pipeline (`gi_capture.frag`: albedo x direct light with shadows + GI + emissive, i.e. the diffuse
+   look of the scene, like Unreal's captures), views in the shared view table after the GI views
+   (`kReflViewBase`). Then, in one render-graph pass with manual barriers on the probe's own
+   textures: `refl_resolve.comp` projects each cube texel's direction (Vulkan cube orientation) into
+   the capture face of its major axis and fills sky texels from the skybox (or the ambient colour);
+   `cube_downsample.comp` builds the mip chain (2x2 box); the existing IBL `Prefilter` pipeline
+   (filtered importance sampling, 64 samples) writes the roughness mips.
+3. **Shading.** `reflections.glsl`: probes are uploaded smallest box first (`GpuReflectionProbe`,
+   64 B, `GpuFrame` +16 B = 1104 B). For each probe containing the point, the reflection ray is
+   intersected with the box and the cube is sampled towards that hit from the capture point (box
+   projection / parallax correction), at lod = roughness x (mips - 1); the probe's weight rises over
+   `blend_distance` from the box faces and the remaining weight falls through to larger probes and
+   finally to the sky (whose GI-based specular occlusion, ADR-0016, still applies). New debug view
+   `Reflections`.
+4. **llvmpipe.** With no probes the shader returns before the loop: Mesa llvmpipe hoisted the first
+   probe load above the loop condition and dereferenced the (then null) buffer address, crashing
+   every frame; the buffer address is also always valid frame-arena memory now.
+5. **Scene / editor.** `gameplay::ReflectionProbeComponent` (`intensity`, `blend_distance`,
+   `enabled`; codec "ReflectionProbe"; box = the entity's position + scale like the GI volume,
+   `reflection_probe_from()`; id = entity index + 1). Editor: Create > Reflection Probe (10 x 4 x 10),
+   inspector section, Add Component entry, light-blue box outline while selected, Engine panel
+   "Reflection probes" + "real-time" switches and probe count, "Reflections" in the View picker.
+   The showcase has a 20 x 6 x 20 m probe (the metal balls now mirror the scene). Practical rule:
+   make the box a little larger than the room so floors and walls lie inside it.
+6. **Cost.** One capture per frame: 6 small passes (CPU-culled per face) + resolve + mips +
+   prefilter of a 128^2 cube; forward shading adds a short loop per pixel (<= 8 box tests).
+
+**Verification (Linux).** `test.renderer` +1 case (slots, one capture per frame, dirty-only
+without realtime, re-capture on move, id / box validation, the 8-probe limit when the set is
+replaced, size change, removal and the switch, deferred releases without device errors);
+`test.gameplay` +2 cases (codec round trip; probe box / id stability / disabled and hidden
+probes). Golden cases `reflections` (the ADR-0016 room with a polished metal floor and a chrome
+ball: the floor mirrors the red / green walls and the blocks, parallax-correct) and
+`reflections_off` (same room without the probe: black floor). ctest 31/31 (cascaded `shadows`
+skipped on llvmpipe; every earlier golden unchanged); editor self-test (+ Create > Reflection
+Probe -> captured every frame), player check and vertical slice validation-clean.
+
+**Not done yet:** Arc references for `reflections` / `reflections_off`; screen-space reflections
+for contact detail; captures that include specular (second bounce); rotated boxes and sphere
+probes; saving captures with the scene for static lighting.

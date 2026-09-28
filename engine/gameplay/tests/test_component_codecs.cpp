@@ -163,6 +163,19 @@ TEST_CASE("GI volume component round-trips (ADR-0016)") {
     CHECK_FALSE(v.enabled);
 }
 
+TEST_CASE("reflection probe component round-trips (ADR-0017)") {
+    World world;
+    REQUIRE(register_default_codecs(world));
+    const Entity e = world.create("Probe");
+    world.add<ReflectionProbeComponent>(e, ReflectionProbeComponent{ 2.0f, 0.25f, false });
+    World out;
+    roundtrip(world, out);
+    const auto& p = out.get<ReflectionProbeComponent>(scene::find_by_name(out, "Probe"));
+    CHECK(p.intensity == 2.0f);
+    CHECK(p.blend_distance == 0.25f);
+    CHECK_FALSE(p.enabled);
+}
+
 TEST_CASE("malformed component documents are skipped with a warning") {
     World world;
     REQUIRE(register_default_codecs(world));

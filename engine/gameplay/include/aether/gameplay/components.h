@@ -10,6 +10,11 @@
 // volume is axis-aligned). Probes are placed every `probe_spacing` metres (at least 2 per axis).
 // The first visible, enabled volume is used. Serialized as "GIVolume".
 //
+// ReflectionProbeComponent (ADR-0017) is a reflection capture: a cubemap of the scene taken at the
+// entity's position, used for reflections of surfaces inside the box (centre = position, size =
+// world scale, axis-aligned). Up to 8 visible, enabled probes are used; the smallest box wins where
+// they overlap. Serialized as "ReflectionProbe".
+//
 // Thread-affinity: plain data; follow the World's rules (main thread for mutation).
 #pragma once
 
@@ -37,6 +42,14 @@ struct GIVolumeComponent {
     bool enabled = true;
 
     AE_REFLECT(GIVolumeComponent, AE_FIELD(probe_spacing), AE_FIELD(intensity), AE_FIELD(enabled))
+};
+
+struct ReflectionProbeComponent {
+    f32  intensity = 1.0f;
+    f32  blend_distance = 1.0f; // metres over which the probe fades in from its box faces
+    bool enabled = true;
+
+    AE_REFLECT(ReflectionProbeComponent, AE_FIELD(intensity), AE_FIELD(blend_distance), AE_FIELD(enabled))
 };
 
 } // namespace aether::gameplay

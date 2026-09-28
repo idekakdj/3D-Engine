@@ -173,6 +173,10 @@ void EditorApp::draw_menu_bar() {
         if (ImGui::IsItemHovered()) {
             ImGui::SetTooltip("Real-time bounced light (global illumination) inside a box; scale it to fit the area");
         }
+        if (ImGui::MenuItem("Reflection Probe")) create_entity(CreateKind::ReflectionProbe, parent);
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("Reflections for shiny surfaces inside a box, captured at its centre; scale it to fit the room");
+        }
         ImGui::Separator();
         if (ImGui::MenuItem("Camera")) create_entity(CreateKind::Camera, parent);
         ImGui::TextDisabled("(hold Shift to create under the selection)");

@@ -67,6 +67,7 @@ enum class CreateKind : u8 {
     SpotLight,
     Camera,
     GIVolume, // ADR-0016
+    ReflectionProbe, // ADR-0017
 };
 
 enum class PlayState : u8 { Edit = 0, Playing, Paused };

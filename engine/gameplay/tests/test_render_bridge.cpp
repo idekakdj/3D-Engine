@@ -358,6 +358,37 @@ TEST_CASE("extract: GI volume box, probe counts and switches (ADR-0016)") {
     CHECK_FALSE(out.gi.enabled);
 }
 
+TEST_CASE("extract: reflection probes (ADR-0017)") {
+    const ReflectionProbeComponent pc{ 1.5f, 0.5f, true };
+    const renderer::ReflectionProbe p =
+        reflection_probe_from(glm::translate(Mat4(1.0f), Vec3(1, 2, 3)) * glm::scale(Mat4(1.0f), Vec3(4, 2, 6)), pc, 9);
+    CHECK(p.id == 9);
+    CHECK(p.position == Vec3(1, 2, 3));
+    CHECK(glm::all(glm::epsilonEqual(p.box_min, Vec3(-1, 1, 0), 1e-4f)));
+    CHECK(glm::all(glm::epsilonEqual(p.box_max, Vec3(3, 3, 6), 1e-4f)));
+    CHECK(p.intensity == 1.5f);
+    CHECK(p.blend_distance == 0.5f);
+
+    MockRenderer        r;
+    RenderResourceCache cache(r, nullptr);
+    World               world;
+    const Entity        a = world.create("A");
+    world.add<ReflectionProbeComponent>(a);
+    const Entity b = world.create("B");
+    world.add<ReflectionProbeComponent>(b, ReflectionProbeComponent{ 1.0f, 1.0f, false });
+    renderer::RenderScene out;
+    extract_render_scene(world, cache, SceneExtractOptions{}, out);
+    REQUIRE(out.reflection_probes.size() == 1); // disabled probes are skipped
+    const u32 id = out.reflection_probes[0].id;
+    CHECK(id != 0);
+    extract_render_scene(world, cache, SceneExtractOptions{}, out);
+    REQUIRE(out.reflection_probes.size() == 1); // cleared per extract, id stable
+    CHECK(out.reflection_probes[0].id == id);
+    scene::set_visible(world, a, false);
+    extract_render_scene(world, cache, SceneExtractOptions{}, out);
+    CHECK(out.reflection_probes.empty());
+}
+
 TEST_CASE("transform_aabb and make_render_view") {
     AABB local;
     local.min = Vec3(-1);

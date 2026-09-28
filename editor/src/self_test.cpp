@@ -573,7 +573,26 @@ void EditorApp::self_test_tick() {
         next();
         break;
     }
-    case 25: { // final checks
+    case 25: { // reflection probe (ADR-0017): Create > Reflection Probe is captured and used
+        if (self_test_frame_ == 3) {
+            const Entity p = create_entity(CreateKind::ReflectionProbe);
+            self_test_uuids_ = { scene::uuid_of(w, p) };
+            return;
+        }
+        if (self_test_frame_ < 10) {
+            return;
+        }
+        const Entity p = ent(0);
+        check(p != kNullEntity && w.has<gameplay::ReflectionProbeComponent>(p), "reflection probe entity created");
+        check(renderer().stats().reflection_probes == 1, "the renderer received the reflection probe");
+        check(renderer().stats().reflection_captures == 1, "the probe is re-captured in real time");
+        if (p != kNullEntity) {
+            w.destroy(p);
+        }
+        next();
+        break;
+    }
+    case 26: { // final checks
         auto* bridge = find_subsystem<gameplay::RenderBridgeSubsystem>();
         check(bridge != nullptr && bridge->last_stats().instances >= 2, "the viewport renders the scene");
         check(viewport_.texture.is_valid(), "viewport render target exists");

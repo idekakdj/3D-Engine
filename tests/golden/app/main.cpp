@@ -120,6 +120,16 @@ struct SceneBuilder {
         scene::set_local_scale(w, e, size);
     }
 
+    // ADR-0017: a reflection capture box (capture point = centre).
+    void reflection_probe(Vec3 centre, Vec3 size, f32 blend = 0.5f) {
+        const Entity e = w.create("ReflectionProbe");
+        gameplay::ReflectionProbeComponent p;
+        p.blend_distance = blend;
+        w.add<gameplay::ReflectionProbeComponent>(e, p);
+        scene::set_local_position(w, e, centre);
+        scene::set_local_scale(w, e, size);
+    }
+
     void sun(f32 intensity = 3.0f) {
         light(LightKind::Directional, Vec3(1.0f, 0.96f, 0.9f), intensity, Vec3(0.0f), yaw_pitch(35.0f, -50.0f));
     }
@@ -168,12 +178,17 @@ void flat_environment(CaseContext& c, Vec3 ambient = Vec3(0.02f)) {
 
 // A 6 x 3 x 6 m room open towards the camera: white floor, ceiling and back wall, red left and
 // green right wall, two white blocks, and a shadow-casting lamp under the ceiling (ADR-0016).
-void room_with_lamp(CaseContext& c) {
+void room_with_lamp(CaseContext& c, bool mirror_floor = false) {
     flat_environment(c, Vec3(0.01f));
     const AssetId white = c.b.material("white", Vec3(0.8f), 0.0f, 0.9f);
     const AssetId red   = c.b.material("red", Vec3(0.8f, 0.08f, 0.06f), 0.0f, 0.9f);
     const AssetId green = c.b.material("green", Vec3(0.1f, 0.7f, 0.12f), 0.0f, 0.9f);
-    c.b.mesh("Floor", BuiltinMesh::Cube, white, Vec3(0.0f, -0.1f, 0.0f), Vec3(6.4f, 0.2f, 6.4f));
+    const AssetId floor = mirror_floor ? c.b.material("polished", Vec3(0.9f), 1.0f, 0.08f) : white;
+    c.b.mesh("Floor", BuiltinMesh::Cube, floor, Vec3(0.0f, -0.1f, 0.0f), Vec3(6.4f, 0.2f, 6.4f));
+    if (mirror_floor) {
+        const AssetId chrome = c.b.material("chrome", Vec3(0.95f), 1.0f, 0.12f);
+        c.b.mesh("Ball", BuiltinMesh::Sphere, chrome, Vec3(0.0f, 0.5f, 1.4f));
+    }
     c.b.mesh("Ceiling", BuiltinMesh::Cube, white, Vec3(0.0f, 3.1f, 0.0f), Vec3(6.4f, 0.2f, 6.4f));
     c.b.mesh("Back", BuiltinMesh::Cube, white, Vec3(0.0f, 1.5f, -3.1f), Vec3(6.4f, 3.4f, 0.2f));
     c.b.mesh("Left", BuiltinMesh::Cube, red, Vec3(-3.1f, 1.5f, 0.0f), Vec3(0.2f, 3.4f, 6.4f));
@@ -293,6 +308,14 @@ const std::vector<GoldenCase>& cases() {
           } },
         { "gi_room_off", "the gi_room scene without GI (flat ambient only), for comparison", false,
           [](CaseContext& c) { room_with_lamp(c); } },
+        { "reflections", "reflection probe: a polished floor and a chrome ball mirror the room (ADR-0017)", false,
+          [](CaseContext& c) {
+              room_with_lamp(c, true);
+              // The box encloses the room (walls included) so the floor lies well inside it.
+              c.b.reflection_probe(Vec3(0.0f, 1.5f, 0.0f), Vec3(6.6f, 3.6f, 6.6f), 0.2f);
+          } },
+        { "reflections_off", "the reflections room without a probe (flat ambient reflection only)", false,
+          [](CaseContext& c) { room_with_lamp(c, true); } },
         { "shadows", "cascaded sun shadows from a column of cubes", true,
           [](CaseContext& c) {
               const AssetId floor = c.b.material("floor", Vec3(0.8f), 0.0f, 0.7f);

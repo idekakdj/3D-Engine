@@ -282,6 +282,8 @@ std::vector<PipelineSpec> build_pipeline_specs(const rhi::DeviceFeatures& featur
     specs[pipeline_index(PipelineId::HiZBuild)] = compute_spec("HiZ.Build", "renderer/hiz_build.comp");
     specs[pipeline_index(PipelineId::PickResolve)] = compute_spec("Pick.Resolve", "renderer/pick_resolve.comp");
     specs[pipeline_index(PipelineId::GiProject)] = compute_spec("GI.Project", "renderer/gi_project.comp");
+    specs[pipeline_index(PipelineId::ReflResolve)] = compute_spec("Refl.Resolve", "renderer/refl_resolve.comp");
+    specs[pipeline_index(PipelineId::CubeDownsample)] = compute_spec("Refl.Downsample", "renderer/cube_downsample.comp");
     {
         PipelineSpec s;
         s.name = "Tonemap";

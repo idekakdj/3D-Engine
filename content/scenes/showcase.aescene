@@ -166,6 +166,40 @@
       }
     },
     {
+      "uuid": "3c8e51a7f09b24d6",
+      "components": {
+        "Name": {
+          "name": "Reflection Probe"
+        },
+        "Transform": {
+          "position": [
+            0.0,
+            2.0,
+            1.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "scale": [
+            20.0,
+            6.0,
+            20.0
+          ]
+        },
+        "Visibility": {
+          "visible": true
+        },
+        "ReflectionProbe": {
+          "intensity": 1.0,
+          "blend_distance": 1.0,
+          "enabled": true
+        }
+      }
+    },
+    {
       "uuid": "1b4c1c4b9396aa2e",
       "components": {
         "Name": {

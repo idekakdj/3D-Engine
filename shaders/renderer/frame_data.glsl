@@ -49,6 +49,7 @@
 #define AE_DEBUG_SHADOW_CASCADES  8u
 #define AE_DEBUG_OVERDRAW         9u
 #define AE_DEBUG_GI               10u
+#define AE_DEBUG_REFLECTIONS      11u
 
 struct GpuInstance {
     mat4 model;
@@ -134,6 +135,19 @@ struct GpuGiProbe {
 };
 layout(buffer_reference, scalar, buffer_reference_align = 16) buffer GiProbeBuffer { GpuGiProbe items[]; };
 
+// ADR-0017 (gpu_data.h GpuReflectionProbe).
+struct GpuReflectionProbe {
+    vec3  box_min;
+    float intensity;
+    vec3  box_max;
+    float blend_distance;
+    vec3  position;
+    uint  cube;
+    uint  mips;
+    uint  pad0, pad1, pad2;
+};
+layout(buffer_reference, scalar, buffer_reference_align = 16) readonly buffer ReflectionProbeBuffer { GpuReflectionProbe items[]; };
+
 layout(buffer_reference, scalar, buffer_reference_align = 4) buffer ClusterGrid { uint counts[]; };
 layout(buffer_reference, scalar, buffer_reference_align = 4) buffer ClusterIndices { uint indices[]; };
 
@@ -199,6 +213,9 @@ layout(buffer_reference, scalar, buffer_reference_align = 16) readonly buffer Fr
     float gi_normal_bias;
     uvec3 gi_counts;
     uint  gi_pad;
+    ReflectionProbeBuffer reflection_probes; // ADR-0017 (count 0 = none)
+    uint  reflection_probe_count;
+    uint  reflection_pad;
 };
 
 vec3 ae_safe_normalize(vec3 v) { return v * inversesqrt(max(dot(v, v), 1e-12)); }

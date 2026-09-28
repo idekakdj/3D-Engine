@@ -220,6 +220,13 @@ private:
     void setup_gi(const RenderScene& scene);
     void cull_gi(const RenderScene& scene);
     bool ensure_gi_resources(u32 probes);
+    // ADR-0017: reflection capture probes.
+    struct ReflSlot;
+    void setup_reflections(const RenderScene& scene);
+    void cull_reflections(const RenderScene& scene);
+    bool ensure_refl_slot(ReflSlot& slot, u32 size);
+    void release_refl_slot(ReflSlot& slot, bool deferred);
+    bool ensure_refl_capture(u32 size);
     void ensure_history();
     void draw_items(rhi::CommandList& cmd, std::span<const DrawItem> items, MeshPush push,
                     bool count_stats);
@@ -287,6 +294,37 @@ private:
         std::vector<SpotShadowSetup> views; // 6 per slot
     };
     GiState                          gi_{};
+    // ADR-0017: reflection probe slots (persistent across frames, keyed by ReflectionProbe::id). At
+    // most one probe is captured per frame (refl_update_), into refl_capture_* then resolved into
+    // the slot's environment cube, mip-mapped and GGX-prefiltered.
+    struct ReflSlot {
+        u32                                id = 0; // 0 = free
+        Vec3                               position{ 0.0f };
+        Vec3                               box_min{ 0.0f };
+        Vec3                               box_max{ 0.0f };
+        f32                                intensity = 1.0f;
+        f32                                blend = 1.0f;
+        u32                                size = 0;
+        u32                                env_mips = 0;
+        u32                                pre_mips = 0;
+        rhi::TextureHandle                 env;
+        rhi::TextureHandle                 pre;
+        rhi::DescriptorHandle              env_sampled;
+        rhi::DescriptorHandle              pre_sampled;
+        std::vector<rhi::DescriptorHandle> env_views;
+        std::vector<rhi::DescriptorHandle> pre_views;
+        bool                               captured = false; // usable for shading (capture scheduled)
+        bool                               written = false;  // cubes hold data (ShaderRead between frames)
+        bool                               dirty = true;
+        bool                               seen = false;
+    };
+    std::array<ReflSlot, kMaxReflectionProbes> refl_{};
+    i32                              refl_update_ = -1; // slot captured this frame
+    u32                              refl_cursor_ = 0;  // realtime round-robin
+    std::vector<SpotShadowSetup>     refl_views_;       // 6 capture faces of refl_update_
+    std::vector<u32>                 refl_order_;       // captured slots, smallest box first
+    PersistentTexture                refl_capture_color_{};
+    PersistentTexture                refl_capture_depth_{};
     PersistentTexture                gi_capture_color_{}; // RGBA16F array, 6 layers per slot
     PersistentTexture                gi_capture_depth_{}; // D32F array, same layout
     std::array<PersistentTexture, 2> history_{};
@@ -315,6 +353,7 @@ private:
     std::vector<PointCandidate>                      point_candidates_;
     std::array<std::vector<DrawItem>, kMaxLocalShadowViews> spot_draws_;
     std::array<std::vector<DrawItem>, kMaxGiProbesPerFrame * kPointShadowFaces> gi_draws_;
+    std::array<std::vector<DrawItem>, kPointShadowFaces> refl_draws_;
     u64                           frame_gpu_address_ = 0;
     u32                           line_vertex_count_ = 0;
     u32                           frame_slot_ = 0;

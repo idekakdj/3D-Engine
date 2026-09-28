@@ -34,7 +34,7 @@ aether_add_test(golden tests/test_image_compare.cpp)
 
 set(AE_GOLDEN_CASES
     pbr_spheres pbr_spheres_no_post punctual_lights emissive_bloom translucency
-    debug_normals debug_albedo debug_roughness spot_shadows point_shadows gi_room gi_room_off shadows)
+    debug_normals debug_albedo debug_roughness spot_shadows point_shadows gi_room gi_room_off reflections reflections_off shadows)
 if(AE_BUILD_TESTS AND AE_GOLDEN_TESTS)
     foreach(c IN LISTS AE_GOLDEN_CASES)
         add_test(NAME golden.${c} COMMAND aether-golden --case ${c})

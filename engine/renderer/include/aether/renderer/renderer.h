@@ -98,6 +98,7 @@ enum class DebugView : u8 {
     None = 0, Albedo, Normals, Roughness, Metallic, AmbientOcclusion, Emissive,
     LightComplexity, ShadowCascades, Overdraw,
     GlobalIllumination, // ADR-0016: indirect diffuse irradiance only (white surfaces)
+    Reflections,        // ADR-0017: the environment / probe reflection only (mirror-like surfaces)
 };
 
 struct RendererSettings {
@@ -136,6 +137,13 @@ struct RendererSettings {
     bool      gi = true;
     u32       gi_probes_per_frame = 8;
     u32       gi_capture_size = 16;
+    // ADR-0017 (additive): reflection capture probes from RenderScene::reflection_probes. A probe is
+    // captured (6 faces of reflection_probe_size^2, 32..512, + prefiltering) when it is new or moved;
+    // with reflection_realtime one probe per frame is also re-captured round-robin, so moving objects
+    // show up in reflections.
+    bool      reflection_probes = true;
+    u32       reflection_probe_size = 128;
+    bool      reflection_realtime = true;
     // ADR-0010 (additive): draw static meshes of the GPU-driven path as meshlets through task +
     // mesh shaders (per-meshlet frustum + backface-cone culling). Needs gpu_culling and
     // DeviceFeatures::mesh_shaders; otherwise the indexed indirect path is used.
@@ -161,6 +169,9 @@ struct RendererStats {
     // ADR-0016: probes in the active GI volume, and probes re-captured this frame.
     u32 gi_probes = 0;
     u32 gi_probes_updated = 0;
+    // ADR-0017: reflection probes in use / captured this frame.
+    u32 reflection_probes = 0;
+    u32 reflection_captures = 0;
 };
 
 struct RendererDesc {

@@ -132,6 +132,11 @@ SceneExtractStats extract_render_scene(const World& world, RenderResourceCache& 
 // size / probe_spacing + 1, clamped to [2, 64]. enabled = false for a degenerate box.
 struct GIVolumeComponent;
 [[nodiscard]] renderer::GiVolume gi_volume_from(const Mat4& world, const GIVolumeComponent& volume);
+// ADR-0017: the renderer's reflection probe for a ReflectionProbeComponent (capture point = the
+// translation, box = translation +- half the basis lengths). box_min == box_max for a degenerate box.
+struct ReflectionProbeComponent;
+[[nodiscard]] renderer::ReflectionProbe reflection_probe_from(const Mat4& world, const ReflectionProbeComponent& probe,
+                                                              u32 id);
 // View parameters for a camera with world matrix `camera_world` (scale is ignored).
 [[nodiscard]] renderer::RenderView make_render_view(const Mat4& camera_world, f32 fov_y_radians,
                                                     f32 near_z, f32 far_z, UVec2 viewport);
