@@ -40,6 +40,16 @@ if (-not $NoValidation -and (Test-Path $vvlRoot)) {
     Write-Host "[run] Vulkan validation layer not provisioned (running without)." -ForegroundColor Yellow
 }
 
+# The exe runs from its bin folder: turn arguments naming existing files / folders (relative to
+# where run.ps1 was called, e.g. --project game.aeproject) into absolute paths first.
+$ExeArgs = @($ExeArgs | ForEach-Object {
+    if ($_ -and -not $_.StartsWith("-") -and -not [System.IO.Path]::IsPathRooted($_) -and (Test-Path -LiteralPath $_)) {
+        (Resolve-Path -LiteralPath $_).Path
+    } else {
+        $_
+    }
+})
+
 Push-Location $bin
 try {
     & $exePath @ExeArgs
