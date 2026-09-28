@@ -1153,7 +1153,7 @@ installer.
 
 ## ADR-0014 — Application identity, projects in the editor UI, precompiled shaders (2026-09-28)
 
-**Status:** accepted; verified on Linux. Closes three "not done yet" items of ADR-0013.
+**Status:** accepted; verified on Linux and on Windows. Closes three "not done yet" items of ADR-0013.
 
 **Decisions**
 1. **Identity.** `resources/` holds `aether.ico` (16-256 px), `aether.png` and `splash.png`,
@@ -1196,5 +1196,11 @@ installed player and editor self-test load all 29 as precompiled (0 compiled) an
 folder stays unchanged; on llvmpipe the pipeline build went from 563 ms to 383 ms (what remains is
 pipeline creation). `scripts/package.ps1 -SmokeTest` gained a fifth check (baked shaders shipped).
 
-**Not done yet:** Windows verification of the icon / version resource / splash / Projects window,
-code signing, a per-shader dependency hash (so one edit only recompiles its dependants).
+**Verified on Windows (owner's Intel Arc PC, 2026-09-28).** `scripts/package.ps1 -SmokeTest` passed
+all five checks. The installed shortcuts show the Aether icon; both executables report their version
+resource (FileDescription "Aether Editor" / "Aether Player", FileVersion 0.1.0, ProductName Aether).
+File > New Project (*Empty* template) relaunched the editor into a scene with only the floor, sun and
+camera; Open Project and Recent Projects list every project and switch between them. The installed
+editor logged `pipelines built in 14 ms (shaders: 29 precompiled, 0 cached, 0 compiled)`.
+
+**Not done yet:** code signing, a per-shader dependency hash (so one edit only recompiles its dependants).
