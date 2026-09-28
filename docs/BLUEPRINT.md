@@ -1245,7 +1245,10 @@ and a back wall: radial shadows across every horizontal face and the -Y face, no
 (cascaded `shadows` skipped on llvmpipe as before). Editor self-test, player check and vertical
 slice pass validation-clean with the showcase lamp shadowed.
 
-**Not done yet:** Arc reference image for `point_shadows`; per-face culling of views that see no
+**Verified on Windows (owner's Intel Arc PC, 2026-09-28).** `aether-golden --case point_shadows
+--update` rendered the same image as llvmpipe (radial shadows, no seams at the cube-face edges).
+
+**Not done yet:** per-face culling of views that see no
 receiver in the camera frustum; shadow caching for static lights (re-render only when something in
 range moves).
 
@@ -1306,6 +1309,10 @@ room without GI, for comparison). ctest 29/29 (cascaded `shadows` skipped on llv
 editor self-test (+ Create > GI Volume -> probes captured), player check and vertical slice pass
 validation-clean.
 
-**Not done yet:** Arc references for `gi_room` / `gi_room_off`; probe relocation out of walls and
+**Verified on Windows (owner's Intel Arc PC, 2026-09-28).** `gi_room` and `gi_room_off` rendered on
+the Arc match the llvmpipe references visually (lit ceiling, filled shadows, red / green bleeding vs.
+black shadows without GI): the capture + SH projection path behaves the same on real hardware.
+
+**Not done yet:** probe relocation out of walls and
 per-probe visibility (depth moments) to remove the remaining leaks; several volumes at once and
 rotated volumes; GI for translucent capture; baking a volume to disk for static scenes.
