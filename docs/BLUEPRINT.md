@@ -1403,7 +1403,7 @@ probes; saving captures with the scene for static lighting.
    string, entity and any. `connect()` enforces the rules: types compatible, one wire per data
    input, one wire per exec output (exec inputs merge), no self links. An unconnected entity
    input is **Self**.
-3. **Node library** (59 nodes).
+3. **Node library** (58 nodes).
    * Events: On Start / On Update / On Key Pressed / On Key Released / On Event / Every N Seconds.
    * Flow: Branch, Sequence, Delay.
    * Actions: Print, Set (World) Position, Move By, Rotate, Set Scale, Set Visible, Look At, Spawn,
