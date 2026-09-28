@@ -354,6 +354,30 @@ void EditorApp::draw_inspector() {
             defer_commit("Remove Camera");
         }
     }
+    if (auto* gv = w.try_get<gameplay::GIVolumeComponent>(e); shown(gv, std::type_identity<gameplay::GIVolumeComponent>{})) {
+        const gameplay::GIVolumeComponent before = *gv;
+        bool                              remove = false;
+        if (component_header("GI Volume", &remove)) {
+            with("GI enabled").toggle(ImGui::Checkbox("Enabled##gi", &gv->enabled));
+            with("GI spacing").drag(ImGui::DragFloat("Probe spacing", &gv->probe_spacing, 0.05f, 0.25f, 50.0f, "%.2f m"));
+            with("GI intensity").drag(ImGui::DragFloat("Intensity##gi", &gv->intensity, 0.01f, 0.0f, 10.0f));
+            const renderer::GiVolume box = gameplay::gi_volume_from(w.world_matrix(e), *gv);
+            if (box.enabled) {
+                ImGui::TextDisabled("%u x %u x %u probes (box = the entity's scale)", box.probe_counts.x,
+                                    box.probe_counts.y, box.probe_counts.z);
+            } else {
+                ImGui::TextDisabled("give the entity a non-zero scale on every axis");
+            }
+        }
+        if (multi) {
+            propagate_fields(w, before, *gv, others, &gameplay::GIVolumeComponent::enabled,
+                             &gameplay::GIVolumeComponent::probe_spacing, &gameplay::GIVolumeComponent::intensity);
+        }
+        if (remove) {
+            remove_all<gameplay::GIVolumeComponent>(w, sel);
+            defer_commit("Remove GI Volume");
+        }
+    }
     if (auto* fc = w.try_get<gameplay::FlyCameraComponent>(e); shown(fc, std::type_identity<gameplay::FlyCameraComponent>{})) {
         const gameplay::FlyCameraComponent before = *fc;
         bool                               remove = false;
@@ -646,6 +670,8 @@ void EditorApp::draw_inspector() {
         });
         item("Light", std::type_identity<LightComponent>{}, [&](Entity x) { w.add<LightComponent>(x); });
         item("Camera", std::type_identity<CameraComponent>{}, [&](Entity x) { w.add<CameraComponent>(x); });
+        item("GI Volume", std::type_identity<gameplay::GIVolumeComponent>{},
+             [&](Entity x) { w.add<gameplay::GIVolumeComponent>(x); });
         item("Fly Camera Controller", std::type_identity<gameplay::FlyCameraComponent>{},
              [&](Entity x) { w.add<gameplay::FlyCameraComponent>(x); });
         ImGui::Separator();

@@ -98,6 +98,12 @@ RendererImpl::~RendererImpl() {
     destroy_persistent(shadow_map_);
     destroy_persistent(spot_shadow_map_);
     destroy_persistent(point_shadow_map_);
+    destroy_persistent(gi_capture_color_);
+    destroy_persistent(gi_capture_depth_);
+    if (gi_.buffer.is_valid()) {
+        device_.destroy(gi_.buffer);
+        gi_.buffer = {};
+    }
     destroy_persistent(history_[0]);
     destroy_persistent(history_[1]);
     for (rhi::BufferHandle* b : { &visibility_buffer_, &readback_buffer_ }) {

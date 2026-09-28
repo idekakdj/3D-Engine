@@ -97,6 +97,7 @@ struct RenderTarget {
 enum class DebugView : u8 {
     None = 0, Albedo, Normals, Roughness, Metallic, AmbientOcclusion, Emissive,
     LightComplexity, ShadowCascades, Overdraw,
+    GlobalIllumination, // ADR-0016: indirect diffuse irradiance only (white surfaces)
 };
 
 struct RendererSettings {
@@ -129,6 +130,12 @@ struct RendererSettings {
     bool      point_shadows = true;
     u32       point_shadow_map_size = 512; // per cube face
     u32       max_point_shadows = 2;
+    // ADR-0016 (additive): dynamic GI from RenderScene::gi. gi_probes_per_frame probes (<= 64) are
+    // re-captured per frame (6 faces of gi_capture_size^2 texels each, 8..64): a volume of N probes
+    // refreshes every N / gi_probes_per_frame frames and gains one light bounce per refresh.
+    bool      gi = true;
+    u32       gi_probes_per_frame = 8;
+    u32       gi_capture_size = 16;
     // ADR-0010 (additive): draw static meshes of the GPU-driven path as meshlets through task +
     // mesh shaders (per-meshlet frustum + backface-cone culling). Needs gpu_culling and
     // DeviceFeatures::mesh_shaders; otherwise the indexed indirect path is used.
@@ -151,6 +158,9 @@ struct RendererStats {
     u32 spot_shadow_maps = 0;
     // ADR-0015: point lights with a (6-face) shadow map this frame.
     u32 point_shadow_maps = 0;
+    // ADR-0016: probes in the active GI volume, and probes re-captured this frame.
+    u32 gi_probes = 0;
+    u32 gi_probes_updated = 0;
 };
 
 struct RendererDesc {

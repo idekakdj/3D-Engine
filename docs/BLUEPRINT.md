@@ -4,7 +4,7 @@
 > across rendering fidelity, editor/tooling, physics/animation, and scripting/gameplay.
 >
 > **Status:** Foundation phase (multi-session project). **Author:** Engine architect (orchestrator).
-> **Doc version:** 1.15 (ADR-0015 applied). Update this header on every material revision.
+> **Doc version:** 1.16 (ADR-0016 applied). Update this header on every material revision.
 
 ---
 
@@ -554,6 +554,7 @@ until it builds and its acceptance check passes.
 - **v1.13** — ADR-0013: installable build — install rules, CPack ZIP + Inno Setup installer, Documents workspace.
 - **v1.14** — ADR-0014: application identity (icon, version info, splash), File > New / Open Project, precompiled shaders.
 - **v1.15** — ADR-0015: point-light shadows (six-view cube shadows sharing the spot-shadow path).
+- **v1.16** — ADR-0016: dynamic diffuse global illumination (irradiance probe volume, GI Volume component).
 
 ---
 
@@ -1247,3 +1248,64 @@ slice pass validation-clean with the showcase lamp shadowed.
 **Not done yet:** Arc reference image for `point_shadows`; per-face culling of views that see no
 receiver in the camera frustum; shadow caching for static lights (re-render only when something in
 range moves).
+
+## ADR-0016 — Dynamic diffuse global illumination: the irradiance probe volume (2026-09-28)
+
+**Status:** accepted; verified on Linux (llvmpipe). Second of the owner's "Unreal-style" features.
+
+**Context.** Indirect light so far came from the environment only (IBL or a flat ambient): rooms
+were lit by the sky through their walls and shadows were black indoors. Hardware ray tracing
+(Lumen / DDGI) is unavailable on the software rasteriser we verify on, and a baked lightmap
+pipeline needs UV2 unwrapping and a slow build step. The owner wants GI that "just works" in the
+editor while editing.
+
+**Decisions**
+1. **Rasterised probe captures, updated continuously.** `RenderScene::gi` (`GiVolume`: an
+   axis-aligned box + probes per axis, additive) defines a regular probe grid. Every frame the
+   renderer re-captures `gi_probes_per_frame` probes round-robin (default 8, <= 64): six 90-degree
+   faces of `gi_capture_size`^2 texels (default 16) each, rendered with the new `gi_capture.frag`
+   (Lambert albedo x direct light from every light with its sun / spot / point shadow maps + the
+   GI volume itself + emissive), into an RGBA16F array. The capture views are extra entries of the
+   ADR-0012 view table (after the shadow views), so the mesh vertex shader and CPU culling are
+   shared. Because a capture reads the volume, each refresh adds one light bounce (multi-bounce
+   converges over a few refreshes); moving lights or objects update within
+   probes / gi_probes_per_frame frames. No ray tracing, no baking, no UV2, works on every device.
+2. **L1 spherical harmonics.** `gi_project.comp` (one workgroup per captured probe) integrates the
+   six faces (texel solid angles; texels that saw nothing take the environment's radiance; back
+   faces of single-sided geometry count as "inside") into L1 SH pre-convolved with the clamped
+   cosine and divided by pi: `irradiance/pi(n) = c.x + dot(c.yzw, n)` per channel (`GpuGiProbe`,
+   64 B, in a persistent storage buffer; the buffer is cleared when the box or grid changes).
+3. **Shading.** `gi.glsl` blends the 8 surrounding probes trilinearly with a DDGI-style smooth
+   back-face weight, down-weights probes that saw > 20 % back faces (inside walls), and offsets the
+   lookup along the geometric normal (0.25 x the smallest spacing) to limit leaking. Inside the box
+   the result replaces the environment's diffuse light; it fades to the environment over one probe
+   cell outside the box. The environment reflection is scaled by min(1, GI / environment
+   luminance): a cheap specular occlusion indoors. New debug view `GlobalIllumination`.
+4. **Data (additive).** `GpuFrame` grew to 1088 B (`gi_probes`, `gi_min`, `gi_intensity`,
+   `gi_inv_spacing`, `gi_normal_bias`, `gi_counts`; off = `gi_counts.x == 0`, no 64-bit compare).
+   Mesh pipeline table +2 (`MeshPass::GiCapture`, static / skinned, no culling), `PipelineId::GiProject`.
+   `RendererSettings::gi` / `gi_probes_per_frame` / `gi_capture_size`, `RendererStats::gi_probes` /
+   `gi_probes_updated`. Limits: 64 probes per axis, 32768 per volume (the densest axis shrinks).
+5. **Scene side.** `gameplay::GIVolumeComponent` (`probe_spacing`, `intensity`, `enabled`;
+   codec "GIVolume"): the entity's position is the box centre and its scale the box size (rotation
+   ignored). `gi_volume_from()` derives the grid (size / spacing + 1 per axis, clamped to 2..64); the
+   first visible, enabled volume is used. The editor has Create > GI Volume, an inspector section
+   (probe count readout), Add Component > GI Volume, a yellow box outline while selected, and in the
+   Engine panel a "Global illumination" switch, a probes-per-frame slider and a debug "View" picker
+   (all DebugView modes, which had no UI before). The showcase scene has a 16 x 6 x 12 m volume.
+6. **Cost.** Per frame 6 x gi_probes_per_frame small depth + colour passes (CPU-culled per face)
+   plus one compute dispatch; the probe buffer is 64 B per probe (e.g. 540 probes = 34 KB). Off, or
+   with no volume, nothing runs and every other golden image is unchanged.
+
+**Verification (Linux).** `test.renderer` +1 case (captures only with a volume, round-robin count,
+per-frame and per-volume clamps, degenerate box, switches, capture-target re-creation);
+`test.gameplay` +2 cases (codec round trip; box / probe counts / clamps and extraction incl.
+disabled and hidden volumes). Golden cases `gi_room` (a lamp in a red / green / white room: lit
+ceiling, filled shadows, red and green bleeding onto the white blocks) and `gi_room_off` (the same
+room without GI, for comparison). ctest 29/29 (cascaded `shadows` skipped on llvmpipe as before);
+editor self-test (+ Create > GI Volume -> probes captured), player check and vertical slice pass
+validation-clean.
+
+**Not done yet:** Arc references for `gi_room` / `gi_room_off`; probe relocation out of walls and
+per-probe visibility (depth moments) to remove the remaining leaks; several volumes at once and
+rotated volumes; GI for translucent capture; baking a volume to disk for static scenes.

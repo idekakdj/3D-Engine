@@ -51,8 +51,10 @@ struct PipelineSpec {
 
 // ---- mesh pipelines (indexed by pass + permutation) ----
 // Pick (ADR-0009): R32Uint id buffer over the finished depth prepass (Equal test, no writes).
-enum class MeshPass : u8 { Depth, Shadow, Forward, Translucent, Overdraw, Pick };
-inline constexpr u32 kMeshPipelineCount = 30;
+// GiCapture (ADR-0016): GI probe cube faces (RGBA16F + depth; no culling so single-sided back
+// faces can be detected; masking is done in-shader from the material flags).
+enum class MeshPass : u8 { Depth, Shadow, Forward, Translucent, Overdraw, Pick, GiCapture };
+inline constexpr u32 kMeshPipelineCount = 32;
 inline constexpr rhi::Format kPickIdFormat = rhi::Format::R32Uint;
 [[nodiscard]] u32 mesh_pipeline_index(MeshPass pass, bool skinned, bool masked, bool double_sided);
 
@@ -72,6 +74,7 @@ enum class PipelineId : u32 {
     GpuCull,     // ADR-0009: GPU-driven instance culling (frustum / two-phase occlusion)
     HiZBuild,    // ADR-0009: reverse-Z min depth pyramid
     PickResolve, // ADR-0009: id buffer texel -> counter buffer
+    GiProject,   // ADR-0016: captured probe faces -> L1 SH irradiance
     Tonemap,    // per target format
     DebugLines, // per target format
     Count

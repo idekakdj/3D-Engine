@@ -5,6 +5,11 @@
 // id is valid, else with MeshRendererComponent::material, else with the default material.
 // Serialized by register_gameplay_codecs() (component_codecs.h) as "MaterialOverrides".
 //
+// GIVolumeComponent (ADR-0016) turns on dynamic global illumination inside a box: the entity's
+// world position is the box centre and its world scale the box size (rotation is ignored - the
+// volume is axis-aligned). Probes are placed every `probe_spacing` metres (at least 2 per axis).
+// The first visible, enabled volume is used. Serialized as "GIVolume".
+//
 // Thread-affinity: plain data; follow the World's rules (main thread for mutation).
 #pragma once
 
@@ -24,6 +29,14 @@ struct MaterialOverridesComponent {
     }
 
     AE_REFLECT(MaterialOverridesComponent, AE_FIELD(materials))
+};
+
+struct GIVolumeComponent {
+    f32  probe_spacing = 1.0f; // metres between probes
+    f32  intensity = 1.0f;     // scales the bounced light
+    bool enabled = true;
+
+    AE_REFLECT(GIVolumeComponent, AE_FIELD(probe_spacing), AE_FIELD(intensity), AE_FIELD(enabled))
 };
 
 } // namespace aether::gameplay

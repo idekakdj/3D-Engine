@@ -850,6 +850,157 @@ void RendererImpl::ensure_point_shadow_map() {
     point_shadow_map_.state = rhi::ResourceState::Undefined;
 }
 
+// ===========================================================================
+// GI probe volume (ADR-0016)
+// ===========================================================================
+void RendererImpl::setup_gi(const RenderScene& scene) {
+    gi_.active = false;
+    gi_.slots.clear();
+    gi_.views.clear();
+    stats_.gi_probes = 0;
+    stats_.gi_probes_updated = 0;
+    const GiVolume& v = scene.gi;
+    if (!settings_.gi || !v.enabled || !pipelines_->valid(PipelineId::GiProject) ||
+        !pipelines_->get(mesh_pipeline_index(MeshPass::GiCapture, false, false, false)).is_valid()) {
+        return;
+    }
+    const Vec3 lo = glm::min(v.min, v.max);
+    const Vec3 hi = glm::max(v.min, v.max);
+    if (!(hi.x - lo.x > 1e-3f && hi.y - lo.y > 1e-3f && hi.z - lo.z > 1e-3f)) {
+        return;
+    }
+    UVec3 counts = glm::clamp(v.probe_counts, UVec3(2u), UVec3(kMaxGiProbeAxis));
+    while (u64(counts.x) * counts.y * counts.z > kMaxGiProbes) { // shrink the densest axis
+        u32& axis = counts.x >= counts.y && counts.x >= counts.z ? counts.x : (counts.y >= counts.z ? counts.y : counts.z);
+        axis = std::max(2u, axis - 1u);
+    }
+    const u32 total = counts.x * counts.y * counts.z;
+    if (lo != gi_.min || hi != gi_.max || counts != gi_.counts) {
+        gi_.min = lo;
+        gi_.max = hi;
+        gi_.counts = counts;
+        gi_.cursor = 0;
+        gi_.clear = true; // stale probes of another volume must not light this one
+    }
+    const u32 slots = std::min({ std::clamp(settings_.gi_probes_per_frame, 1u, kMaxGiProbesPerFrame), total });
+    if (!ensure_gi_resources(total)) {
+        return;
+    }
+    gi_.active = true;
+    stats_.gi_probes = total;
+
+    const Vec3 spacing = (hi - lo) / Vec3(counts - UVec3(1u));
+    const f32  near_z = 0.02f;
+    const f32  far_z = glm::length(hi - lo) + 2.0f * std::max({ spacing.x, spacing.y, spacing.z }) + 1.0f;
+    const Mat4 proj = to_reverse_z(perspective(90.0f * kDeg2Rad, 1.0f, near_z, far_z), near_z);
+    gi_.cursor %= total;
+    for (u32 s = 0; s < slots; ++s) {
+        const u32   probe = (gi_.cursor + s) % total;
+        const UVec3 c(probe % counts.x, (probe / counts.x) % counts.y, probe / (counts.x * counts.y));
+        const Vec3  pos = lo + Vec3(c) * spacing;
+        gi_.slots.push_back(probe);
+        for (u32 f = 0; f < kPointShadowFaces; ++f) {
+            const PointShadowFace face = point_shadow_face(f);
+            SpotShadowSetup       vs;
+            vs.view_proj = proj * look_at(pos, pos + face.forward, face.up);
+            vs.frustum = extract_frustum(vs.view_proj, true, false);
+            vs.layer = s * kPointShadowFaces + f;
+            gi_.views.push_back(vs);
+        }
+    }
+    gi_.cursor = (gi_.cursor + slots) % total;
+    stats_.gi_probes_updated = slots;
+}
+
+void RendererImpl::cull_gi(const RenderScene& scene) {
+    for (auto& l : gi_draws_) {
+        l.clear();
+    }
+    if (!gi_.active) {
+        return;
+    }
+    // Every opaque / masked instance (casting shadows or not) is seen by the probes.
+    for (u32 i = 0; i < resolved_.size(); ++i) {
+        const ResolvedInstance& r = resolved_[i];
+        if (!r.valid || r.blend == static_cast<u8>(BlendMode::Translucent)) {
+            continue;
+        }
+        const bool never_cull = instance_flags::has(scene.instances[i].flags, instance_flags::kNeverCull);
+        DrawItem d;
+        d.instance = i;
+        d.first_index = r.first_index;
+        d.index_count = r.index_count;
+        d.vertex_offset = r.vertex_offset;
+        d.skin_arena = r.skin_arena;
+        d.skinned = r.skinned;
+        d.double_sided = r.double_sided;
+        d.pipeline = mesh_pipeline_index(MeshPass::GiCapture, r.skinned, false, false);
+        d.key = (static_cast<u64>(d.pipeline) << 40) | (static_cast<u64>(d.skin_arena) << 32) | r.material;
+        for (u32 v = 0; v < gi_.views.size(); ++v) {
+            if (never_cull || frustum_intersects_aabb(gi_.views[v].frustum, r.bounds)) {
+                gi_draws_[v].push_back(d);
+            }
+        }
+    }
+    auto by_key = [](const DrawItem& a, const DrawItem& b) { return a.key < b.key; };
+    for (u32 v = 0; v < gi_.views.size(); ++v) {
+        std::sort(gi_draws_[v].begin(), gi_draws_[v].end(), by_key);
+    }
+}
+
+bool RendererImpl::ensure_gi_resources(u32 probes) {
+    if (!gi_.buffer.is_valid() || gi_.capacity < probes) {
+        if (gi_.buffer.is_valid()) {
+            device_.destroy(gi_.buffer); // deferred past in-flight frames by the device
+        }
+        rhi::BufferDesc d;
+        d.size = static_cast<u64>(probes) * sizeof(GpuGiProbe);
+        d.usage = rhi::BufferUsage::Storage | rhi::BufferUsage::TransferDst;
+        d.debug_name = "GI.Probes";
+        gi_.buffer = device_.create_buffer(d);
+        gi_.capacity = gi_.buffer.is_valid() ? probes : 0u;
+        gi_.state = rhi::ResourceState::Undefined;
+        gi_.clear = true;
+        if (!gi_.buffer.is_valid()) {
+            AE_LOG_ERROR("Renderer", "GI probe buffer creation failed ({} probes)", probes);
+            return false;
+        }
+    }
+    const u32 size = std::clamp(settings_.gi_capture_size, 8u, 64u);
+    const u32 layers = std::clamp(settings_.gi_probes_per_frame, 1u, kMaxGiProbesPerFrame) * kPointShadowFaces;
+    if (gi_capture_color_.texture.is_valid() && gi_capture_color_.size.x == size && gi_capture_color_.layers == layers) {
+        return gi_capture_depth_.texture.is_valid();
+    }
+    destroy_persistent(gi_capture_color_);
+    destroy_persistent(gi_capture_depth_);
+    rhi::TextureDesc d;
+    d.type = rhi::TextureType::Tex2DArray;
+    d.width = size;
+    d.height = size;
+    d.array_layers = layers;
+    d.format = kHdrFormat;
+    d.usage = rhi::TextureUsage::ColorAttach | rhi::TextureUsage::Sampled;
+    d.debug_name = "GI.Capture";
+    gi_capture_color_.texture = device_.create_texture(d);
+    d.format = kDepthFormat;
+    d.usage = rhi::TextureUsage::DepthAttach;
+    d.debug_name = "GI.CaptureDepth";
+    gi_capture_depth_.texture = device_.create_texture(d);
+    if (!gi_capture_color_.texture.is_valid() || !gi_capture_depth_.texture.is_valid()) {
+        AE_LOG_ERROR("Renderer", "GI capture targets creation failed ({}^2 x {})", size, layers);
+        destroy_persistent(gi_capture_color_);
+        destroy_persistent(gi_capture_depth_);
+        return false;
+    }
+    gi_capture_color_.sampled = device_.register_texture(gi_capture_color_.texture, point_clamp_);
+    for (PersistentTexture* t : { &gi_capture_color_, &gi_capture_depth_ }) {
+        t->size = UVec2(size);
+        t->layers = layers;
+        t->state = rhi::ResourceState::Undefined;
+    }
+    return true;
+}
+
 void RendererImpl::ensure_history() {
     if (history_[0].texture.is_valid() && history_[0].size == output_size_) {
         return;
@@ -1013,8 +1164,9 @@ void RendererImpl::render(const RenderScene& scene, rhi::CommandList& cmd, const
                       FrameArena::padded(std::max<usize>(n_inst, 1) * sizeof(GpuCullInstance)) +
                       FrameArena::padded(sizeof(GpuCullView)) +
                       FrameArena::padded(std::max<usize>(n_inst, 1) * sizeof(u32)) +
-                      FrameArena::padded(kMaxLocalShadowViews * sizeof(GpuSpotShadow)) +
-                      FrameArena::kAlignment * 13;
+                      FrameArena::padded(kMaxViewTableEntries * sizeof(GpuSpotShadow)) +
+                      FrameArena::padded(kMaxGiProbesPerFrame * sizeof(u32)) +
+                      FrameArena::kAlignment * 14;
     if (!frame_arena_.begin_frame(slot, bytes)) {
         cmd.pop_debug_group();
         return;
@@ -1028,9 +1180,11 @@ void RendererImpl::render(const RenderScene& scene, rhi::CommandList& cmd, const
     const auto a_cull = frame_arena_.allocate_array<GpuCullInstance>(std::max<usize>(n_inst, 1));
     const auto a_cull_view = frame_arena_.allocate(sizeof(GpuCullView));
     const auto a_uid = frame_arena_.allocate_array<u32>(std::max<usize>(n_inst, 1));
-    const auto a_spot = frame_arena_.allocate_array<GpuSpotShadow>(kMaxLocalShadowViews);
+    const auto a_spot = frame_arena_.allocate_array<GpuSpotShadow>(kMaxViewTableEntries);
+    const auto a_gi_slots = frame_arena_.allocate_array<u32>(kMaxGiProbesPerFrame);
     if (!a_frame.valid() || !a_inst.valid() || !a_mat.valid() || !a_light.valid() || !a_joint.valid() ||
-        !a_line.valid() || !a_cull.valid() || !a_cull_view.valid() || !a_uid.valid() || !a_spot.valid()) {
+        !a_line.valid() || !a_cull.valid() || !a_cull_view.valid() || !a_uid.valid() || !a_spot.valid() ||
+        !a_gi_slots.valid()) {
         cmd.pop_debug_group();
         return;
     }
@@ -1043,6 +1197,8 @@ void RendererImpl::render(const RenderScene& scene, rhi::CommandList& cmd, const
     build_draw_lists(scene);
     setup_spot_shadows(); // assigns GpuLight::shadow before the light upload below
     cull_spot_shadows(scene);
+    setup_gi(scene);
+    cull_gi(scene);
     if (gpu_.active) {
         write_cull_data(static_cast<GpuCullInstance*>(a_cull.cpu), static_cast<GpuCullView*>(a_cull_view.cpu));
         gpu_.candidates_gpu = a_cull.gpu;
@@ -1094,6 +1250,24 @@ void RendererImpl::render(const RenderScene& scene, rhi::CommandList& cmd, const
         frame.spot_shadows = a_spot.gpu;
         frame.spot_shadow_map = stats_.spot_shadow_maps > 0 ? didx(spot_shadow_map_.sampled) : kGpuInvalidIndex;
         frame.spot_shadow_count = static_cast<u32>(spot_shadows_.size());
+    }
+    if (gi_.active) { // ADR-0016: capture views follow the shadow views in the same table
+        auto* dst = static_cast<GpuSpotShadow*>(a_spot.cpu) + kMaxLocalShadowViews;
+        for (u32 i = 0; i < gi_.views.size(); ++i) {
+            GpuSpotShadow g;
+            g.view_proj = gi_.views[i].view_proj;
+            std::memcpy(&dst[i], &g, sizeof(GpuSpotShadow));
+        }
+        std::memcpy(a_gi_slots.cpu, gi_.slots.data(), gi_.slots.size() * sizeof(u32));
+        gi_.slots_gpu = a_gi_slots.gpu;
+        const Vec3 spacing = (gi_.max - gi_.min) / Vec3(gi_.counts - UVec3(1u));
+        frame.spot_shadows = a_spot.gpu;
+        frame.gi_probes = device_.buffer_device_address(gi_.buffer);
+        frame.gi_min = gi_.min;
+        frame.gi_intensity = std::max(scene.gi.intensity, 0.0f);
+        frame.gi_inv_spacing = Vec3(1.0f) / spacing;
+        frame.gi_normal_bias = 0.25f * std::min({ spacing.x, spacing.y, spacing.z });
+        frame.gi_counts = gi_.counts;
     }
     std::memcpy(a_frame.cpu, &frame, sizeof(GpuFrame));
     frame_gpu_address_ = a_frame.gpu;
@@ -1261,6 +1435,85 @@ void RendererImpl::build_graph(const RenderScene& scene, const RenderTarget& tar
                     ctx.cmd.end_rendering();
                     ctx.cmd.pop_debug_group();
                 }
+            });
+    }
+
+    // ---- GI probe capture + projection (ADR-0016) ----
+    RGBuffer gi_probes;
+    if (gi_.active) {
+        gi_probes = g.import_buffer(gi_.buffer, static_cast<u64>(gi_.capacity) * sizeof(GpuGiProbe), gi_.state,
+                                    rhi::ResourceState::ShaderRead, "GI.Probes");
+        gi_.state = rhi::ResourceState::ShaderRead;
+        if (gi_.clear) {
+            gi_.clear = false;
+            g.add_pass("GI.Clear")
+                .write(gi_probes, rhi::ResourceState::TransferDst)
+                .execute([gi_probes](RGContext& ctx) { ctx.cmd.fill_buffer(ctx.buffer(gi_probes), 0, ~0ull, 0u); });
+        }
+        RGTextureDesc cd;
+        cd.type = rhi::TextureType::Tex2DArray;
+        cd.format = kHdrFormat;
+        cd.width = cd.height = gi_capture_color_.size.x;
+        cd.array_layers = gi_capture_color_.layers;
+        const RGTexture capture = g.import_texture(gi_capture_color_.texture, cd, gi_capture_color_.state,
+                                                   rhi::ResourceState::ShaderRead, "GI.Capture",
+                                                   didx(gi_capture_color_.sampled));
+        gi_capture_color_.state = rhi::ResourceState::ShaderRead;
+        cd.format = kDepthFormat;
+        const RGTexture capture_depth = g.import_texture(gi_capture_depth_.texture, cd, gi_capture_depth_.state,
+                                                         rhi::ResourceState::DepthStencilAttachment, "GI.CaptureDepth");
+        gi_capture_depth_.state = rhi::ResourceState::DepthStencilAttachment;
+        g.add_pass("GI.Capture")
+            .write(capture, rhi::ResourceState::ColorAttachment)
+            .write(capture_depth, rhi::ResourceState::DepthStencilAttachment)
+            .read(gi_probes, rhi::ResourceState::ShaderRead)
+            .read(shadow, rhi::ResourceState::ShaderRead)
+            .read(spot_shadow, rhi::ResourceState::ShaderRead)
+            .read(point_shadow, rhi::ResourceState::ShaderRead)
+            .execute([this, frame_addr](RGContext& ctx) {
+                const UVec2 cs = gi_capture_color_.size;
+                for (u32 v = 0; v < gi_.views.size(); ++v) {
+                    ctx.cmd.push_debug_group("GI.CaptureFace");
+                    rhi::RenderingInfo ri;
+                    ri.render_area = cs;
+                    rhi::ColorAttachment ca;
+                    ca.texture = gi_capture_color_.texture;
+                    ca.layer = gi_.views[v].layer;
+                    ca.load = rhi::LoadOp::Clear;
+                    ca.clear_color = Vec4(0.0f); // alpha 0 = nothing hit (sky)
+                    ri.color.push_back(ca);
+                    ri.has_depth = true;
+                    ri.depth.texture = gi_capture_depth_.texture;
+                    ri.depth.layer = gi_.views[v].layer;
+                    ri.depth.load = rhi::LoadOp::Clear;
+                    ri.depth.store = rhi::StoreOp::DontCare;
+                    ri.depth.clear_depth = 0.0f; // reverse-Z
+                    ctx.cmd.begin_rendering(ri);
+                    ctx.cmd.set_viewport(full_viewport(cs));
+                    ctx.cmd.set_scissor(full_scissor(cs));
+                    MeshPush push;
+                    push.frame = frame_addr;
+                    push.view_index = 1 + kMaxCascades + kMaxLocalShadowViews + v;
+                    draw_items(ctx.cmd, gi_draws_[v], push, false);
+                    ctx.cmd.end_rendering();
+                    ctx.cmd.pop_debug_group();
+                }
+            });
+        const u64 slots_addr = gi_.slots_gpu;
+        g.add_pass("GI.Project")
+            .read(capture, rhi::ResourceState::ShaderRead)
+            .write(gi_probes, rhi::ResourceState::ShaderWrite)
+            .execute([this, frame_addr, gi_probes, capture, slots_addr](RGContext& ctx) {
+                ctx.cmd.bind_pipeline(pipelines_->get(PipelineId::GiProject));
+                GiProjectPush p;
+                p.frame = frame_addr;
+                p.probes = ctx.address(gi_probes);
+                p.slots = slots_addr;
+                p.capture_tex = ctx.sampled(capture);
+                p.size = gi_capture_color_.size.x;
+                p.view_base = kMaxLocalShadowViews;
+                ctx.cmd.push_constants(rhi::ShaderStage::Compute, 0, sizeof(p), &p);
+                ctx.cmd.dispatch(static_cast<u32>(gi_.slots.size()), 1, 1);
             });
     }
 
@@ -1568,6 +1821,7 @@ void RendererImpl::build_graph(const RenderScene& scene, const RenderTarget& tar
             .read(shadow, rhi::ResourceState::ShaderRead)
             .read(spot_shadow, rhi::ResourceState::ShaderRead)
             .read(point_shadow, rhi::ResourceState::ShaderRead)
+            .read(gi_probes, rhi::ResourceState::ShaderRead)
             .read(ao, rhi::ResourceState::ShaderRead)
             .read(light_grid, rhi::ResourceState::ShaderRead);
         if (pipelines_->valid(PipelineId::LightCull)) {

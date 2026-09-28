@@ -121,6 +121,14 @@ PipelineSpec mesh_spec(MeshPass pass, bool skinned, bool masked, bool double_sid
         g.targets.color = { kPickIdFormat };
         g.targets.depth = kDepthFormat;
         break;
+    case MeshPass::GiCapture:
+        pass_name = "GiCapture";
+        s.fs = { "renderer/gi_capture.frag", rhi::ShaderStage::Fragment, {} };
+        g.cull = rhi::CullMode::None;
+        g.depth = rhi::DepthState{ true, true, rhi::CompareOp::GreaterEqual, false, false };
+        g.targets.color = { kHdrFormat };
+        g.targets.depth = kDepthFormat;
+        break;
     case MeshPass::Overdraw:
         pass_name = "Overdraw";
         s.fs = { "renderer/overdraw.frag", rhi::ShaderStage::Fragment, {} };
@@ -192,6 +200,7 @@ u32 mesh_pipeline_index(MeshPass pass, bool skinned, bool masked, bool double_si
     case MeshPass::Translucent: return 20u + sk * 2u + ds;
     case MeshPass::Overdraw: return 24u + sk;
     case MeshPass::Pick: return 26u + sk * 2u + ds;
+    case MeshPass::GiCapture: return 30u + sk;
     }
     return 0;
 }
@@ -218,6 +227,7 @@ std::vector<rhi::ShaderDefine> shared_shader_defines() {
         def("AE_TASK_GROUP_SIZE", std::to_string(kTaskGroupSize)),
         def("AE_MESHLET_MAX_VERTICES", std::to_string(kMeshletMaxVertices)),
         def("AE_MESHLET_MAX_TRIANGLES", std::to_string(kMeshletMaxTriangles)),
+        def("AE_GI_PROJECT_THREADS", std::to_string(kGiProjectThreads)),
     };
 }
 
@@ -240,6 +250,8 @@ std::vector<PipelineSpec> build_pipeline_specs(const rhi::DeviceFeatures& featur
         for (const bool ds : { false, true }) {
             specs[mesh_pipeline_index(MeshPass::Pick, sk, false, ds)] = mesh_spec(MeshPass::Pick, sk, false, ds, features);
         }
+        specs[mesh_pipeline_index(MeshPass::GiCapture, sk, false, false)] =
+            mesh_spec(MeshPass::GiCapture, sk, false, false, features);
     }
 
     {
@@ -269,6 +281,7 @@ std::vector<PipelineSpec> build_pipeline_specs(const rhi::DeviceFeatures& featur
     specs[pipeline_index(PipelineId::GpuCull)] = compute_spec("GpuCull", "renderer/gpu_cull.comp");
     specs[pipeline_index(PipelineId::HiZBuild)] = compute_spec("HiZ.Build", "renderer/hiz_build.comp");
     specs[pipeline_index(PipelineId::PickResolve)] = compute_spec("Pick.Resolve", "renderer/pick_resolve.comp");
+    specs[pipeline_index(PipelineId::GiProject)] = compute_spec("GI.Project", "renderer/gi_project.comp");
     {
         PipelineSpec s;
         s.name = "Tonemap";

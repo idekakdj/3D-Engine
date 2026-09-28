@@ -132,6 +132,40 @@
       }
     },
     {
+      "uuid": "6a1f0c3e9b27d451",
+      "components": {
+        "Name": {
+          "name": "GI Volume"
+        },
+        "Transform": {
+          "position": [
+            0.0,
+            3.0,
+            0.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "scale": [
+            16.0,
+            6.0,
+            12.0
+          ]
+        },
+        "Visibility": {
+          "visible": true
+        },
+        "GIVolume": {
+          "probe_spacing": 1.5,
+          "intensity": 1.0,
+          "enabled": true
+        }
+      }
+    },
+    {
       "uuid": "1b4c1c4b9396aa2e",
       "components": {
         "Name": {

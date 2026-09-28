@@ -127,6 +127,11 @@ SceneExtractStats extract_render_scene(const World& world, RenderResourceCache& 
 
 // The first visible CameraComponent with primary == true (else the first visible camera).
 [[nodiscard]] Entity find_primary_camera(const World& world);
+// ADR-0016: the renderer's GI volume for a GIVolumeComponent with world matrix `world` (centre =
+// translation, size = the lengths of the basis vectors; rotation ignored). Probe counts per axis =
+// size / probe_spacing + 1, clamped to [2, 64]. enabled = false for a degenerate box.
+struct GIVolumeComponent;
+[[nodiscard]] renderer::GiVolume gi_volume_from(const Mat4& world, const GIVolumeComponent& volume);
 // View parameters for a camera with world matrix `camera_world` (scale is ignored).
 [[nodiscard]] renderer::RenderView make_render_view(const Mat4& camera_world, f32 fov_y_radians,
                                                     f32 near_z, f32 far_z, UVec2 viewport);

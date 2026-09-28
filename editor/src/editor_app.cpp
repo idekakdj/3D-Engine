@@ -9,6 +9,7 @@
 #include "aether/editor/console.h"
 #include "aether/editor/material_instance.h"
 #include "aether/editor/prefab.h"
+#include "aether/gameplay/components.h"
 #include "aether/gameplay/debug_ui.h"
 #include "aether/gameplay/render_bridge.h"
 #include "aether/gameplay/scene_instantiation.h"
@@ -220,6 +221,30 @@ void EditorApp::on_imgui() {
 }
 
 void EditorApp::on_render_frame(rhi::FrameInfo& frame, renderer::RenderScene& scene) {
+    // ADR-0016: outline the selected GI volume (edit mode only).
+    if (const Entity sel = selected(); play_state_ == PlayState::Edit && sel != kNullEntity && world().valid(sel)) {
+        if (const auto* gv = world().try_get<gameplay::GIVolumeComponent>(sel)) {
+            const renderer::GiVolume box = gameplay::gi_volume_from(world().world_matrix(sel), *gv);
+            if (box.enabled) {
+                const u32 col = gv->enabled ? 0xFFFFD040u : 0xFF808080u; // RGBA8, R in the low byte
+                for (int i = 0; i < 12; ++i) {
+                    // Edge i joins corners a and b (bit 0 = x, 1 = y, 2 = z) that differ in one axis.
+                    const int axis = i / 4;
+                    const int rest = i % 4;
+                    const int lo = axis == 0 ? (rest & 1) << 1 | (rest & 2) << 1
+                                   : axis == 1 ? (rest & 1) | (rest & 2) << 1
+                                               : (rest & 1) | (rest & 2);
+                    const int a = lo;
+                    const int b = lo | (1 << axis);
+                    auto corner = [&](int c) {
+                        return Vec3((c & 1) ? box.max.x : box.min.x, (c & 2) ? box.max.y : box.min.y,
+                                    (c & 4) ? box.max.z : box.min.z);
+                    };
+                    scene.debug_lines.push_back(renderer::RenderLine{ corner(a), corner(b), col, col });
+                }
+            }
+        }
+    }
     if (viewport_.texture.is_valid() && viewport_.size.x > 0 && viewport_.size.y > 0) {
         renderer().resize(viewport_.size);
         scene.view.viewport = viewport_.size;
@@ -554,6 +579,7 @@ Entity EditorApp::create_entity(CreateKind kind, Entity parent) {
     case CreateKind::PointLight: name = "Point Light"; break;
     case CreateKind::SpotLight: name = "Spot Light"; break;
     case CreateKind::Camera: name = "Camera"; break;
+    case CreateKind::GIVolume: name = "GI Volume"; break;
     }
     const bool   has_parent = parent != kNullEntity && w.valid(parent);
     const Entity e          = has_parent ? w.create_child(parent, name) : w.create(name);
@@ -604,6 +630,10 @@ Entity EditorApp::create_entity(CreateKind kind, Entity parent) {
         w.add<CameraComponent>(e, c);
         break;
     }
+    case CreateKind::GIVolume: // ADR-0016: the entity's scale is the box size
+        w.add<gameplay::GIVolumeComponent>(e);
+        scene::set_local_scale(w, e, Vec3(16.0f, 6.0f, 16.0f));
+        break;
     }
     w.update_transforms();
     record_edit("Create");

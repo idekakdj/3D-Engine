@@ -79,10 +79,23 @@ struct EnvironmentSettings {
     f32       skybox_lod = 0.0f;
 };
 
+// ADR-0016 (additive): dynamic diffuse global illumination from an irradiance probe grid over an
+// axis-aligned box. The renderer re-captures a few probes every frame (direct light + shadows +
+// the previous GI = multiple bounces) and shades indirect diffuse light from them inside the box
+// (IBL / flat ambient outside, blended over one probe cell at the border).
+struct GiVolume {
+    bool enabled = false;
+    Vec3 min{ 0.0f };
+    Vec3 max{ 0.0f };
+    UVec3 probe_counts{ 0 }; // per axis, each clamped to [2, 64]; <= 32768 probes in total
+    f32  intensity = 1.0f;
+};
+
 // The frame's complete render input. Rebuilt (or double-buffered) each frame.
 struct RenderScene {
     RenderView                      view{};
     EnvironmentSettings             environment{};
+    GiVolume                        gi{};           // ADR-0016
     std::vector<RenderMeshInstance> instances;
     std::vector<RenderLight>        lights;
     std::vector<RenderLine>         debug_lines;

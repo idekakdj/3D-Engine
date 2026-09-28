@@ -475,3 +475,62 @@ TEST_CASE("point shadows: six faces per light, budget, pass, mixed with spots (A
         MESSAGE(e);
     }
 }
+
+TEST_CASE("GI volume: round-robin probe captures, clamps, reset and switches (ADR-0016)") {
+    Fixture     f(true);
+    RenderScene s = f.scene(40);
+    f.frame(s);
+    CHECK(f.r->stats().gi_probes == 0); // no volume: GI stays off
+    CHECK_FALSE(f.logged("GI.CaptureFace"));
+
+    s.gi.enabled = true;
+    s.gi.min = Vec3(-30.0f, -2.0f, -8.0f);
+    s.gi.max = Vec3(30.0f, 6.0f, 2.0f);
+    s.gi.probe_counts = UVec3(4, 3, 2); // 24 probes
+    f.device.state.log.clear();
+    const u32 dispatches = f.device.state.dispatches;
+    f.frame(s);
+    CHECK(f.r->stats().gi_probes == 24);
+    CHECK(f.r->stats().gi_probes_updated == 8); // default gi_probes_per_frame
+    CHECK(f.logged("GI.CaptureFace"));
+    CHECK(f.device.state.dispatches > dispatches); // GI.Project
+
+    // All probes per frame (clamped to the volume), then the per-frame maximum.
+    f.r->settings().gi_probes_per_frame = 1000;
+    f.frame(s);
+    CHECK(f.r->stats().gi_probes_updated == 24);
+    s.gi.probe_counts = UVec3(64, 64, 64); // 262144 > kMaxGiProbes: shrunk to fit
+    f.frame(s);
+    CHECK(f.r->stats().gi_probes <= kMaxGiProbes);
+    CHECK(f.r->stats().gi_probes > 16384);
+    CHECK(f.r->stats().gi_probes_updated == kMaxGiProbesPerFrame);
+    s.gi.probe_counts = UVec3(1, 0, 1); // clamped up to 2 per axis
+    f.frame(s);
+    CHECK(f.r->stats().gi_probes == 8);
+
+    // A degenerate box and the switches turn it off.
+    RenderScene flat = s;
+    flat.gi.max.y = flat.gi.min.y;
+    f.frame(flat);
+    CHECK(f.r->stats().gi_probes == 0);
+    f.r->settings().gi = false;
+    f.device.state.log.clear();
+    f.frame(s);
+    CHECK(f.r->stats().gi_probes == 0);
+    CHECK_FALSE(f.logged("GI.CaptureFace"));
+    f.r->settings().gi = true;
+    s.gi.enabled = false;
+    f.frame(s);
+    CHECK(f.r->stats().gi_probes == 0);
+
+    // Capture size / slot count changes re-create the capture targets.
+    s.gi.enabled = true;
+    f.r->settings().gi_capture_size = 32;
+    f.r->settings().gi_probes_per_frame = 3;
+    f.frame(s);
+    CHECK(f.r->stats().gi_probes_updated == 3);
+    CHECK(f.device.state.errors.empty());
+    for (const std::string& e : f.device.state.errors) {
+        MESSAGE(e);
+    }
+}

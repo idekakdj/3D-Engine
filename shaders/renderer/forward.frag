@@ -4,7 +4,8 @@
 //   compensation; energy-conserving Lambert diffuse; tangent-space normal maps (bitangent
 //   sign in tangent.w); occlusion; emissive; directional (CSM) + clustered point/spot
 //   lights with inverse-square windowed falloff; IBL (irradiance + split-sum specular) or
-//   flat ambient; SSAO on indirect light; debug views.
+//   flat ambient, replaced inside a GI probe volume by its irradiance (ADR-0016); SSAO on
+//   indirect light; debug views.
 #version 460
 #extension GL_GOOGLE_include_directive : require
 #include "common/bindless.glsl"
@@ -14,6 +15,7 @@
 #include "brdf.glsl"
 #include "shadows.glsl"
 #include "clusters.glsl"
+#include "gi.glsl"
 
 layout(location = 0) in vec3 v_world_pos;
 layout(location = 1) in vec3 v_normal;
@@ -128,19 +130,29 @@ void main() {
 #endif
     float ao = min(material_ao, ssao);
     vec3  spec_weight = f0 * dfg.x + dfg.y;
-    vec3  indirect_diffuse;
+    vec3  env_irradiance; // irradiance / pi of the environment (IBL or flat ambient)
     vec3  indirect_specular;
     if ((frame.flags & AE_FRAME_IBL) != 0u) {
         vec3  R = reflect(-V, N);
         float lod = perceptual_roughness * float(max(frame.prefiltered_mips, 1u) - 1u);
-        vec3  irradiance = texture(AE_TEXCUBE(frame.irradiance_map), N).rgb; // pre-divided by pi
         vec3  prefiltered = textureLod(AE_TEXCUBE(frame.prefiltered_map), R, lod).rgb;
-        indirect_diffuse = diffuse_color * irradiance * frame.ibl_intensity;
+        env_irradiance = texture(AE_TEXCUBE(frame.irradiance_map), N).rgb * frame.ibl_intensity; // pre-divided by pi
         indirect_specular = prefiltered * frame.ibl_intensity;
     } else {
-        indirect_diffuse = diffuse_color * frame.ambient;
+        env_irradiance = frame.ambient;
         indirect_specular = frame.ambient;
     }
+    // ADR-0016: inside the GI volume the probes replace the environment's diffuse light, and the
+    // environment reflection is dimmed where the probes see less light than the open sky would
+    // give (indoors, under overhangs) - a cheap specular occlusion from the same data.
+    float gi_w;
+    vec3  gi_irradiance = ae_gi_irradiance(frame, v_world_pos, N, Ng, gi_w);
+    vec3  irradiance = mix(env_irradiance, gi_irradiance, gi_w);
+    if (gi_w > 0.0) {
+        float ratio = clamp(ae_luminance(gi_irradiance) / max(ae_luminance(env_irradiance), 1e-4), 0.0, 1.0);
+        indirect_specular *= mix(1.0, ratio, gi_w);
+    }
+    vec3 indirect_diffuse = diffuse_color * irradiance;
     indirect_diffuse *= (1.0 - spec_weight);
     indirect_specular *= spec_weight * energy_comp;
     color += indirect_diffuse * ao + indirect_specular * ae_specular_occlusion(NoV, ao, alpha);
@@ -156,6 +168,7 @@ void main() {
         else if (dv == AE_DEBUG_METALLIC) d = vec3(metallic);
         else if (dv == AE_DEBUG_AO) d = vec3(ao);
         else if (dv == AE_DEBUG_EMISSIVE) d = emissive;
+        else if (dv == AE_DEBUG_GI) d = irradiance;
         else if (dv == AE_DEBUG_LIGHT_COMPLEXITY) d = ae_heatmap(float(count + frame.directional_count) / 32.0);
         else if (dv == AE_DEBUG_SHADOW_CASCADES) {
             d = frame.cascade_count > 0u && view_z < frame.shadow_distance

@@ -20,6 +20,7 @@
 #include "aether/assets/asset_traits.h"
 #include "aether/assets/asset_types.h"
 #include "aether/gameplay/application.h"
+#include "aether/gameplay/components.h"
 #include "aether/gameplay/procedural_mesh.h"
 #include "aether/gameplay/render_bridge.h"
 #include "aether/renderer/renderer.h"
@@ -109,6 +110,16 @@ struct SceneBuilder {
         scene::set_local_rotation(w, e, rot);
     }
 
+    // ADR-0016: dynamic GI inside an axis-aligned box.
+    void gi_volume(Vec3 centre, Vec3 size, f32 spacing) {
+        const Entity e = w.create("GIVolume");
+        gameplay::GIVolumeComponent v;
+        v.probe_spacing = spacing;
+        w.add<gameplay::GIVolumeComponent>(e, v);
+        scene::set_local_position(w, e, centre);
+        scene::set_local_scale(w, e, size);
+    }
+
     void sun(f32 intensity = 3.0f) {
         light(LightKind::Directional, Vec3(1.0f, 0.96f, 0.9f), intensity, Vec3(0.0f), yaw_pitch(35.0f, -50.0f));
     }
@@ -153,6 +164,24 @@ void flat_environment(CaseContext& c, Vec3 ambient = Vec3(0.02f)) {
     env.ambient_intensity = 1.0f;
     c.bridge.set_environment(env);
     c.settings.ibl = false;
+}
+
+// A 6 x 3 x 6 m room open towards the camera: white floor, ceiling and back wall, red left and
+// green right wall, two white blocks, and a shadow-casting lamp under the ceiling (ADR-0016).
+void room_with_lamp(CaseContext& c) {
+    flat_environment(c, Vec3(0.01f));
+    const AssetId white = c.b.material("white", Vec3(0.8f), 0.0f, 0.9f);
+    const AssetId red   = c.b.material("red", Vec3(0.8f, 0.08f, 0.06f), 0.0f, 0.9f);
+    const AssetId green = c.b.material("green", Vec3(0.1f, 0.7f, 0.12f), 0.0f, 0.9f);
+    c.b.mesh("Floor", BuiltinMesh::Cube, white, Vec3(0.0f, -0.1f, 0.0f), Vec3(6.4f, 0.2f, 6.4f));
+    c.b.mesh("Ceiling", BuiltinMesh::Cube, white, Vec3(0.0f, 3.1f, 0.0f), Vec3(6.4f, 0.2f, 6.4f));
+    c.b.mesh("Back", BuiltinMesh::Cube, white, Vec3(0.0f, 1.5f, -3.1f), Vec3(6.4f, 3.4f, 0.2f));
+    c.b.mesh("Left", BuiltinMesh::Cube, red, Vec3(-3.1f, 1.5f, 0.0f), Vec3(0.2f, 3.4f, 6.4f));
+    c.b.mesh("Right", BuiltinMesh::Cube, green, Vec3(3.1f, 1.5f, 0.0f), Vec3(0.2f, 3.4f, 6.4f));
+    c.b.mesh("Tall", BuiltinMesh::Cube, white, Vec3(-1.1f, 0.9f, -0.9f), Vec3(1.0f, 1.8f, 1.0f), yaw_pitch(20.0f, 0.0f));
+    c.b.mesh("Short", BuiltinMesh::Cube, white, Vec3(1.2f, 0.45f, 0.6f), Vec3(1.0f, 0.9f, 1.0f), yaw_pitch(-15.0f, 0.0f));
+    c.b.light(LightKind::Point, Vec3(1.0f, 0.95f, 0.85f), 25.0f, Vec3(0.0f, 2.6f, 0.0f), Quat(1, 0, 0, 0), 12.0f, true);
+    c.b.camera(Vec3(0.0f, 1.5f, 7.6f), 0.0f, -3.0f, 55.0f);
 }
 
 const std::vector<GoldenCase>& cases() {
@@ -254,6 +283,16 @@ const std::vector<GoldenCase>& cases() {
                         true);
               c.b.camera(Vec3(0.0f, 5.0f, 6.5f), 0.0f, -38.0f);
           } },
+        { "gi_room", "dynamic GI: a lamp in a red / green / white room, colour bleeding (ADR-0016)", false,
+          [](CaseContext& c) {
+              room_with_lamp(c);
+              c.b.gi_volume(Vec3(0.0f, 1.5f, 0.0f), Vec3(5.8f, 2.8f, 5.8f), 1.0f);
+              // Converge within the warm-up: every probe is re-captured each frame (4 x 7 x 7 = 196
+              // probes, 64 per frame), so the 40 frames give ~13 bounces.
+              c.settings.gi_probes_per_frame = 64;
+          } },
+        { "gi_room_off", "the gi_room scene without GI (flat ambient only), for comparison", false,
+          [](CaseContext& c) { room_with_lamp(c); } },
         { "shadows", "cascaded sun shadows from a column of cubes", true,
           [](CaseContext& c) {
               const AssetId floor = c.b.material("floor", Vec3(0.8f), 0.0f, 0.7f);

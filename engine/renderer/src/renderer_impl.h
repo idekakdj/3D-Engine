@@ -216,6 +216,10 @@ private:
     void cull_spot_shadows(const RenderScene& scene);
     void ensure_spot_shadow_map();
     void ensure_point_shadow_map();
+    // ADR-0016: GI probe volume.
+    void setup_gi(const RenderScene& scene);
+    void cull_gi(const RenderScene& scene);
+    bool ensure_gi_resources(u32 probes);
     void ensure_history();
     void draw_items(rhi::CommandList& cmd, std::span<const DrawItem> items, MeshPush push,
                     bool count_stats);
@@ -265,6 +269,26 @@ private:
     PersistentTexture                shadow_map_{};
     PersistentTexture                spot_shadow_map_{};  // ADR-0012: D32F array, point-clamp sampled
     PersistentTexture                point_shadow_map_{}; // ADR-0015: D32F array, 6 layers per point light
+    // ADR-0016: GI probe volume. The probe buffer persists across frames (each frame re-captures
+    // a few probes round-robin); it is cleared whenever the volume's box or grid changes.
+    struct GiState {
+        rhi::BufferHandle  buffer;
+        u32                capacity = 0; // probes
+        rhi::ResourceState state = rhi::ResourceState::Undefined;
+        bool               clear = false;
+        bool               active = false; // this frame
+        Vec3               min{ 0.0f };
+        Vec3               max{ 0.0f };
+        UVec3              counts{ 0 };
+        u32                cursor = 0;     // next probe to capture
+        u32                capture_size = 0;
+        std::vector<u32>   slots;          // probe index per capture slot this frame
+        u64                slots_gpu = 0;  // their frame-arena copy
+        std::vector<SpotShadowSetup> views; // 6 per slot
+    };
+    GiState                          gi_{};
+    PersistentTexture                gi_capture_color_{}; // RGBA16F array, 6 layers per slot
+    PersistentTexture                gi_capture_depth_{}; // D32F array, same layout
     std::array<PersistentTexture, 2> history_{};
     u32                              history_index_ = 0;
     bool                             history_valid_ = false;
@@ -290,6 +314,7 @@ private:
     std::vector<SpotShadowSetup>                     spot_shadows_;
     std::vector<PointCandidate>                      point_candidates_;
     std::array<std::vector<DrawItem>, kMaxLocalShadowViews> spot_draws_;
+    std::array<std::vector<DrawItem>, kMaxGiProbesPerFrame * kPointShadowFaces> gi_draws_;
     u64                           frame_gpu_address_ = 0;
     u32                           line_vertex_count_ = 0;
     u32                           frame_slot_ = 0;

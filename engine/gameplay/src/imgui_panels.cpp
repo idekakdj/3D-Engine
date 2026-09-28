@@ -69,6 +69,28 @@ void draw_engine_stats(Application& app, bool* open) {
         ImGui::SameLine();
         ImGui::Checkbox("TAA", &settings.taa);
         ImGui::Checkbox("Debug lines", &settings.draw_debug_lines);
+        // ADR-0016: dynamic GI (needs a GI Volume in the scene).
+        ImGui::Checkbox("Global illumination", &settings.gi);
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("Bounced light inside GI Volumes (Create > GI Volume)");
+        }
+        if (settings.gi) {
+            int per_frame = static_cast<int>(settings.gi_probes_per_frame);
+            ImGui::SetNextItemWidth(120.0f);
+            if (ImGui::SliderInt("probes / frame", &per_frame, 1, 64)) {
+                settings.gi_probes_per_frame = static_cast<u32>(per_frame);
+            }
+            ImGui::SameLine();
+            ImGui::TextDisabled("%u probes", rs.gi_probes);
+        }
+        static const char* kViews[] = { "Lit",      "Albedo",           "Normals",         "Roughness",
+                                        "Metallic", "Ambient occlusion", "Emissive",        "Light complexity",
+                                        "Shadow cascades", "Overdraw",   "Global illumination" };
+        int view = static_cast<int>(settings.debug_view);
+        ImGui::SetNextItemWidth(180.0f);
+        if (ImGui::Combo("View", &view, kViews, IM_ARRAYSIZE(kViews))) {
+            settings.debug_view = static_cast<renderer::DebugView>(view);
+        }
         if (auto* bridge = app.find_subsystem<RenderBridgeSubsystem>(); bridge != nullptr && bridge->cache() != nullptr) {
             const RenderCacheStats cs = bridge->cache()->stats();
             ImGui::Text("assets: %zu meshes, %zu materials, %zu textures", cs.meshes, cs.materials, cs.textures);

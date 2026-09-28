@@ -1,0 +1,107 @@
+// shaders/renderer/gi_project.comp — projects a probe's 6 captured faces into L1 spherical
+// harmonics of irradiance / pi and stores them (ADR-0016). One workgroup per capture slot.
+// Texels that saw nothing take the sky (environment) radiance of their direction; the fraction of
+// texels that saw back faces is kept so the shading can ignore probes stuck inside geometry.
+#version 460
+#extension GL_GOOGLE_include_directive : require
+#include "common/bindless.glsl"
+#include "frame_data.glsl"
+
+#ifndef AE_GI_PROJECT_THREADS
+#define AE_GI_PROJECT_THREADS 64
+#endif
+
+layout(local_size_x = AE_GI_PROJECT_THREADS) in;
+
+layout(buffer_reference, scalar, buffer_reference_align = 4) readonly buffer GiSlotBuffer { uint probe[]; };
+
+layout(push_constant, scalar) uniform GiProjectPush {
+    FrameData     frame;
+    GiProbeBuffer probes;
+    GiSlotBuffer  slots;
+    uint          capture_tex;
+    uint          size;
+    uint          view_base;
+    uint          pad;
+} pc;
+
+shared mat4 s_inv_view_proj[6];
+shared vec4 s_sum[AE_GI_PROJECT_THREADS][4]; // xyz = rgb of SH coefficient k (Y00, Y1x, Y1y, Y1z)
+shared vec2 s_count[AE_GI_PROJECT_THREADS];  // x = back-face weight, y = total weight
+
+void main() {
+    FrameData frame = pc.frame;
+    uint      slot = gl_WorkGroupID.x;
+    uint      lid = gl_LocalInvocationIndex;
+    if (lid < 6u) {
+        s_inv_view_proj[lid] = inverse(frame.spot_shadows.items[pc.view_base + slot * 6u + lid].view_proj);
+    }
+    barrier();
+
+    vec3 c0 = vec3(0.0), c1 = vec3(0.0), c2 = vec3(0.0), c3 = vec3(0.0);
+    float back = 0.0, total = 0.0;
+    uint  per_face = pc.size * pc.size;
+    float inv_size = 1.0 / float(pc.size);
+    bool  ibl = (frame.flags & AE_FRAME_IBL) != 0u;
+    float sky_lod = float(max(frame.prefiltered_mips, 1u) - 1u) * 0.6;
+    for (uint t = lid; t < per_face * 6u; t += AE_GI_PROJECT_THREADS) {
+        uint face = t / per_face;
+        uint texel = t - face * per_face;
+        uint x = texel % pc.size;
+        uint y = texel / pc.size;
+        // Face views are exactly 90 degrees: NDC doubles as the tangent-plane coordinate.
+        vec2  ndc = (vec2(x, y) + 0.5) * inv_size * 2.0 - 1.0;
+        // Two points of the texel's ray (reverse-Z: depth 1 = near plane) give its direction.
+        vec4  far_h = s_inv_view_proj[face] * vec4(ndc, 0.5, 1.0);
+        vec4  near_h = s_inv_view_proj[face] * vec4(ndc, 1.0, 1.0);
+        vec3  dir = ae_safe_normalize(far_h.xyz / far_h.w - near_h.xyz / near_h.w);
+        float d2 = 1.0 + dot(ndc, ndc);
+        float w = 4.0 * inv_size * inv_size / (d2 * sqrt(d2)); // solid angle of the texel
+        vec4  c = texelFetch(AE_TEX2DARRAY(pc.capture_tex), ivec3(x, y, slot * 6u + face), 0);
+        vec3  radiance;
+        if (c.a < -0.5) {
+            radiance = vec3(0.0);
+            back += w;
+        } else if (c.a > 0.5) {
+            radiance = c.rgb;
+        } else if (ibl) {
+            radiance = textureLod(AE_TEXCUBE(frame.prefiltered_map), dir, sky_lod).rgb * frame.ibl_intensity;
+        } else {
+            radiance = frame.ambient;
+        }
+        total += w;
+        c0 += radiance * (0.282095 * w);
+        c1 += radiance * (0.488603 * dir.x * w);
+        c2 += radiance * (0.488603 * dir.y * w);
+        c3 += radiance * (0.488603 * dir.z * w);
+    }
+    s_sum[lid][0] = vec4(c0, 0.0);
+    s_sum[lid][1] = vec4(c1, 0.0);
+    s_sum[lid][2] = vec4(c2, 0.0);
+    s_sum[lid][3] = vec4(c3, 0.0);
+    s_count[lid] = vec2(back, total);
+    barrier();
+    for (uint stride = AE_GI_PROJECT_THREADS / 2u; stride > 0u; stride >>= 1u) {
+        if (lid < stride) {
+            for (uint k = 0u; k < 4u; ++k) {
+                s_sum[lid][k] += s_sum[lid + stride][k];
+            }
+            s_count[lid] += s_count[lid + stride];
+        }
+        barrier();
+    }
+    if (lid == 0u) {
+        // Irradiance / pi (n) = sum_l A_l / pi * c_lm Y_lm(n), A0 = pi, A1 = 2 pi / 3:
+        //   = 0.282095 c00 + (2/3) 0.488603 (c1x n.x + c1y n.y + c1z n.z)
+        vec3 e0 = s_sum[0][0].xyz * 0.282095;
+        vec3 ex = s_sum[0][1].xyz * (0.488603 * 2.0 / 3.0);
+        vec3 ey = s_sum[0][2].xyz * (0.488603 * 2.0 / 3.0);
+        vec3 ez = s_sum[0][3].xyz * (0.488603 * 2.0 / 3.0);
+        GpuGiProbe p;
+        p.r = vec4(e0.r, ex.r, ey.r, ez.r);
+        p.g = vec4(e0.g, ex.g, ey.g, ez.g);
+        p.b = vec4(e0.b, ex.b, ey.b, ez.b);
+        p.meta = vec4(s_count[0].x / max(s_count[0].y, 1e-6), 1.0, 0.0, 0.0);
+        pc.probes.items[pc.slots.probe[slot]] = p;
+    }
+}

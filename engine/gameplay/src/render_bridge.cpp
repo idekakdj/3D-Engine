@@ -552,6 +552,23 @@ Entity find_primary_camera(const World& world) {
     return primary != kNullEntity ? primary : fallback;
 }
 
+renderer::GiVolume gi_volume_from(const Mat4& world, const GIVolumeComponent& volume) {
+    renderer::GiVolume out;
+    const Vec3 size(glm::length(Vec3(world[0])), glm::length(Vec3(world[1])), glm::length(Vec3(world[2])));
+    if (!(size.x > 1e-3f && size.y > 1e-3f && size.z > 1e-3f)) {
+        return out;
+    }
+    const Vec3 centre(world[3]);
+    const f32  spacing = std::max(volume.probe_spacing, 0.05f);
+    const Vec3 n = glm::clamp(glm::ceil(size / spacing) + 1.0f, Vec3(2.0f), Vec3(64.0f));
+    out.enabled = true;
+    out.min = centre - size * 0.5f;
+    out.max = centre + size * 0.5f;
+    out.probe_counts = UVec3(n);
+    out.intensity = std::max(volume.intensity, 0.0f);
+    return out;
+}
+
 renderer::RenderView make_render_view(const Mat4& camera_world, f32 fov_y_radians, f32 near_z, f32 far_z,
                                       UVec2 viewport) {
     // Rigid part of the camera transform (normalised axes; scale must not skew the view).
@@ -579,6 +596,7 @@ SceneExtractStats extract_render_scene(const World& world, RenderResourceCache& 
                                        const SceneExtractOptions& options, renderer::RenderScene& out) {
     SceneExtractStats stats;
     out.clear();
+    out.gi = {}; // ADR-0016: set below when a volume is present
     const auto& reg = world.registry();
 
     const auto world_matrix = [&](Entity e) -> Mat4 {
@@ -605,6 +623,17 @@ SceneExtractStats extract_render_scene(const World& world, RenderResourceCache& 
         out.view            = make_render_view(fallback, 60.0f * kDeg2Rad, 0.1f, 1000.0f, options.viewport);
     }
     out.view.exposure = options.exposure;
+
+    // ---- GI volume (ADR-0016): the first visible, enabled one --------------------------------
+    for (const auto [e, gv] : reg.view<const gameplay::GIVolumeComponent>().each()) {
+        if (!gv.enabled || !scene::is_visible_in_hierarchy(world, e)) {
+            continue;
+        }
+        out.gi = gi_volume_from(world_matrix(e), gv);
+        if (out.gi.enabled) {
+            break;
+        }
+    }
 
     // ---- lights ------------------------------------------------------------------------------
     for (const auto [e, lc] : reg.view<const LightComponent>().each()) {

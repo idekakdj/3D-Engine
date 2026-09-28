@@ -471,6 +471,16 @@ bool register_gameplay_codecs(World& world) {
                    read(j, "zoom_factor", c.zoom_factor) && read(j, "pan_sensitivity", c.pan_sensitivity);
         });
 
+    ok &= add_codec<GIVolumeComponent>(
+        world, "GIVolume",
+        [](const World&, const GIVolumeComponent& c) {
+            return json{ { "probe_spacing", c.probe_spacing }, { "intensity", c.intensity }, { "enabled", c.enabled } };
+        },
+        [](const World&, const json& j, GIVolumeComponent& c) {
+            return read(j, "probe_spacing", c.probe_spacing) && read(j, "intensity", c.intensity) &&
+                   read(j, "enabled", c.enabled);
+        });
+
     ok &= add_codec<MaterialOverridesComponent>(
         world, "MaterialOverrides",
         [](const World&, const MaterialOverridesComponent& c) {

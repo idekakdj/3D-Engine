@@ -17,6 +17,7 @@
 #include "aether/editor/prefab.h"
 #include "aether/gameplay/procedural_mesh.h"
 #include "aether/gameplay/render_bridge.h"
+#include "aether/gameplay/components.h"
 #include "aether/physics/components.h"
 #include "aether/renderer/renderer.h"
 #include "aether/rhi/device_ext.h"
@@ -553,7 +554,26 @@ void EditorApp::self_test_tick() {
         next();
         break;
     }
-    case 24: { // final checks
+    case 24: { // GI volume (ADR-0016): Create > GI Volume turns on probe captures
+        if (self_test_frame_ == 3) {
+            const Entity v = create_entity(CreateKind::GIVolume);
+            self_test_uuids_ = { scene::uuid_of(w, v) };
+            return;
+        }
+        if (self_test_frame_ < 10) {
+            return;
+        }
+        const Entity v = ent(0);
+        check(v != kNullEntity && w.has<gameplay::GIVolumeComponent>(v), "GI volume entity created");
+        check(renderer().stats().gi_probes > 0, "the renderer received the GI volume");
+        check(renderer().stats().gi_probes_updated > 0, "GI probes are captured every frame");
+        if (v != kNullEntity) {
+            w.destroy(v);
+        }
+        next();
+        break;
+    }
+    case 25: { // final checks
         auto* bridge = find_subsystem<gameplay::RenderBridgeSubsystem>();
         check(bridge != nullptr && bridge->last_stats().instances >= 2, "the viewport renders the scene");
         check(viewport_.texture.is_valid(), "viewport render target exists");

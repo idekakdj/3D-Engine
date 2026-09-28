@@ -48,6 +48,7 @@
 #define AE_DEBUG_LIGHT_COMPLEXITY 7u
 #define AE_DEBUG_SHADOW_CASCADES  8u
 #define AE_DEBUG_OVERDRAW         9u
+#define AE_DEBUG_GI               10u
 
 struct GpuInstance {
     mat4 model;
@@ -124,6 +125,15 @@ struct GpuSpotShadow {
 };
 layout(buffer_reference, scalar, buffer_reference_align = 16) readonly buffer SpotShadowBuffer { GpuSpotShadow items[]; };
 
+// ADR-0016 (gpu_data.h GpuGiProbe): irradiance/pi(n) = c.x + dot(c.yzw, n) per channel.
+struct GpuGiProbe {
+    vec4 r;
+    vec4 g;
+    vec4 b;
+    vec4 meta; // x = back-face fraction, y = 1 once captured
+};
+layout(buffer_reference, scalar, buffer_reference_align = 16) buffer GiProbeBuffer { GpuGiProbe items[]; };
+
 layout(buffer_reference, scalar, buffer_reference_align = 4) buffer ClusterGrid { uint counts[]; };
 layout(buffer_reference, scalar, buffer_reference_align = 4) buffer ClusterIndices { uint indices[]; };
 
@@ -182,6 +192,13 @@ layout(buffer_reference, scalar, buffer_reference_align = 16) readonly buffer Fr
     SpotShadowBuffer spot_shadows; // ADR-0012
     uint  spot_shadow_map;         // sampler2DArray (depth, point clamp; gathered + compared in-shader)
     uint  spot_shadow_count;       // GpuSpotShadow entries (spot views + point faces)
+    GiProbeBuffer gi_probes;       // ADR-0016 (0 = off)
+    vec3  gi_min;
+    float gi_intensity;
+    vec3  gi_inv_spacing;
+    float gi_normal_bias;
+    uvec3 gi_counts;
+    uint  gi_pad;
 };
 
 vec3 ae_safe_normalize(vec3 v) { return v * inversesqrt(max(dot(v, v), 1e-12)); }

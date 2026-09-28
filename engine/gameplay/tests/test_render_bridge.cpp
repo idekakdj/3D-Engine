@@ -323,6 +323,41 @@ TEST_CASE("extract: hooks for physics poses and skinning palettes") {
     CHECK(p.joint_count == 0);
 }
 
+TEST_CASE("extract: GI volume box, probe counts and switches (ADR-0016)") {
+    GIVolumeComponent v;
+    v.probe_spacing = 2.0f;
+    v.intensity = 0.5f;
+    Mat4 m = glm::translate(Mat4(1.0f), Vec3(1, 2, 3)) * glm::rotate(Mat4(1.0f), 0.3f, Vec3(0, 1, 0)) *
+             glm::scale(Mat4(1.0f), Vec3(10, 4, 1));
+    const renderer::GiVolume g = gi_volume_from(m, v);
+    CHECK(g.enabled);
+    CHECK(glm::all(glm::epsilonEqual(g.min, Vec3(-4, 0, 2.5f), 1e-4f)));
+    CHECK(glm::all(glm::epsilonEqual(g.max, Vec3(6, 4, 3.5f), 1e-4f)));
+    CHECK(g.probe_counts == UVec3(6, 3, 2)); // size / spacing + 1, at least 2
+    CHECK(g.intensity == 0.5f);
+    v.probe_spacing = 0.0f; // clamped: at most 64 per axis
+    CHECK(gi_volume_from(glm::scale(Mat4(1.0f), Vec3(100.0f)), v).probe_counts == UVec3(64));
+    CHECK_FALSE(gi_volume_from(glm::scale(Mat4(1.0f), Vec3(1, 0, 1)), v).enabled);
+
+    MockRenderer        r;
+    RenderResourceCache cache(r, nullptr);
+    World               world;
+    const Entity        off = world.create("Off");
+    world.add<GIVolumeComponent>(off, GIVolumeComponent{ 1.0f, 1.0f, false });
+    renderer::RenderScene out;
+    extract_render_scene(world, cache, SceneExtractOptions{}, out);
+    CHECK_FALSE(out.gi.enabled);
+    const Entity on = world.create("On");
+    world.add<GIVolumeComponent>(on, GIVolumeComponent{});
+    scene::set_local_scale(world, on, Vec3(4.0f));
+    extract_render_scene(world, cache, SceneExtractOptions{}, out);
+    CHECK(out.gi.enabled);
+    CHECK(out.gi.probe_counts == UVec3(5));
+    scene::set_visible(world, on, false);
+    extract_render_scene(world, cache, SceneExtractOptions{}, out);
+    CHECK_FALSE(out.gi.enabled);
+}
+
 TEST_CASE("transform_aabb and make_render_view") {
     AABB local;
     local.min = Vec3(-1);

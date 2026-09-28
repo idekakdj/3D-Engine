@@ -31,6 +31,13 @@ inline constexpr u32 kMaxPointShadows = 4; // ADR-0015: shadow-casting point lig
 inline constexpr u32 kPointShadowFaces = 6; // one perspective view per cube face (+X,-X,+Y,-Y,+Z,-Z)
 // GpuSpotShadow entries per frame: spots first, then 6 consecutive faces per point light.
 inline constexpr u32 kMaxLocalShadowViews = kMaxSpotShadows + kMaxPointShadows * kPointShadowFaces;
+// ADR-0016: GI probe volume. Each updated probe is captured as 6 cube faces whose views follow the
+// shadow views in the GpuSpotShadow table (entry kMaxLocalShadowViews + probe_slot * 6 + face).
+inline constexpr u32 kMaxGiProbesPerFrame = 64;
+inline constexpr u32 kMaxGiProbeAxis = 64;      // probes per axis
+inline constexpr u32 kMaxGiProbes = 32768;      // probes per volume
+inline constexpr u32 kGiProjectThreads = 64;    // gi_project.comp workgroup size
+inline constexpr u32 kMaxViewTableEntries = kMaxLocalShadowViews + kMaxGiProbesPerFrame * kPointShadowFaces;
 inline constexpr u32 kMaxLights = 4096;       // uploaded per frame (extra lights are dropped)
 inline constexpr u32 kGpuInvalidIndex = 0xFFFF'FFFFu;
 
@@ -170,6 +177,14 @@ struct GpuFrame {
     u64  spot_shadows = 0;                   // 1016 SpotShadowBuffer (ADR-0012)
     u32  spot_shadow_map = kGpuInvalidIndex; // 1024 sampler2DArray (depth, point clamp)
     u32  spot_shadow_count = 0;              // 1028
+    // ADR-0016: irradiance probe volume (gi_counts.x == 0 => off; probes on a regular grid).
+    u64  gi_probes = 0;                      // 1032 GiProbeBuffer
+    Vec3 gi_min{ 0.0f };                     // 1040 world position of probe (0,0,0)
+    f32  gi_intensity = 1.0f;                // 1052
+    Vec3 gi_inv_spacing{ 1.0f };             // 1056 1 / probe spacing per axis
+    f32  gi_normal_bias = 0.0f;              // 1068 world units along the surface normal
+    UVec3 gi_counts{ 0 };                    // 1072 probes per axis (>= 2 each when on)
+    u32  gi_pad = 0;                         // 1084
 };
 static_assert(offsetof(GpuFrame, view) == 48);
 static_assert(offsetof(GpuFrame, cascade_view_proj) == 560);
@@ -184,7 +199,19 @@ static_assert(offsetof(GpuFrame, shadow_distance) == 992);
 static_assert(offsetof(GpuFrame, user_ids) == 1008);
 static_assert(offsetof(GpuFrame, spot_shadows) == 1016);
 static_assert(offsetof(GpuFrame, spot_shadow_count) == 1028);
-static_assert(sizeof(GpuFrame) == 1032);
+static_assert(offsetof(GpuFrame, gi_probes) == 1032);
+static_assert(offsetof(GpuFrame, gi_counts) == 1072);
+static_assert(sizeof(GpuFrame) == 1088);
+
+// ADR-0016: one irradiance probe - L1 spherical harmonics pre-convolved with the clamped cosine
+// and divided by pi, per colour channel: irradiance/pi (n) = c.x + dot(c.yzw, n).
+struct GpuGiProbe {
+    Vec4 r{ 0.0f };    // 0
+    Vec4 g{ 0.0f };    // 16
+    Vec4 b{ 0.0f };    // 32
+    Vec4 meta{ 0.0f }; // 48 x = back-face fraction seen (probe inside geometry), y = 1 once captured
+};
+static_assert(sizeof(GpuGiProbe) == 64);
 
 // Local-light shadow view (ADR-0012 spot; ADR-0015 point = 6 consecutive cube-face entries).
 // GpuLight::shadow of a spot light = its index in this array.
@@ -438,6 +465,18 @@ struct BloomPush {
     u32  pad[3]{};
 };
 static_assert(sizeof(BloomPush) == 48);
+
+// ADR-0016: gi_project.comp - one workgroup per probe captured this frame.
+struct GiProjectPush {
+    u64 frame = 0;       // 0  FrameData (sky / ambient, the capture view matrices)
+    u64 probes = 0;      // 8  GiProbeBuffer (written)
+    u64 slots = 0;       // 16 u32[] probe index of each capture slot
+    u32 capture_tex = 0; // 24 sampler2DArray (RGBA16F, 6 layers per slot; a < 0 = back face, 0 = sky)
+    u32 size = 0;        // 28 capture face edge in texels
+    u32 view_base = 0;   // 32 GpuSpotShadow entry of slot 0 face 0
+    u32 pad = 0;
+};
+static_assert(sizeof(GiProjectPush) == 40);
 
 struct TonemapPush {
     u32  color_tex = 0;       // 0  HDR input (TAA output or scene color)

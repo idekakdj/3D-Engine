@@ -82,6 +82,7 @@ TEST_CASE("every renderer pipeline permutation compiles") {
                 idx.insert(mesh_pipeline_index(MeshPass::Translucent, sk, m, ds));
                 idx.insert(mesh_pipeline_index(MeshPass::Overdraw, sk, m, ds));
                 idx.insert(mesh_pipeline_index(MeshPass::Pick, sk, m, ds));
+                idx.insert(mesh_pipeline_index(MeshPass::GiCapture, sk, m, ds));
             }
         }
     }

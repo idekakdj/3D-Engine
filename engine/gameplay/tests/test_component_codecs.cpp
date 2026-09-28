@@ -150,6 +150,19 @@ TEST_CASE("camera and material override components round-trip") {
     CHECK_FALSE(mo.slot(7).is_valid());
 }
 
+TEST_CASE("GI volume component round-trips (ADR-0016)") {
+    World world;
+    REQUIRE(register_default_codecs(world));
+    const Entity e = world.create("Volume");
+    world.add<GIVolumeComponent>(e, GIVolumeComponent{ 0.75f, 1.5f, false });
+    World out;
+    roundtrip(world, out);
+    const auto& v = out.get<GIVolumeComponent>(scene::find_by_name(out, "Volume"));
+    CHECK(v.probe_spacing == 0.75f);
+    CHECK(v.intensity == 1.5f);
+    CHECK_FALSE(v.enabled);
+}
+
 TEST_CASE("malformed component documents are skipped with a warning") {
     World world;
     REQUIRE(register_default_codecs(world));

@@ -169,6 +169,10 @@ void EditorApp::draw_menu_bar() {
         if (ImGui::MenuItem("Directional Light")) create_entity(CreateKind::DirectionalLight, parent);
         if (ImGui::MenuItem("Point Light")) create_entity(CreateKind::PointLight, parent);
         if (ImGui::MenuItem("Spot Light")) create_entity(CreateKind::SpotLight, parent);
+        if (ImGui::MenuItem("GI Volume")) create_entity(CreateKind::GIVolume, parent);
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("Real-time bounced light (global illumination) inside a box; scale it to fit the area");
+        }
         ImGui::Separator();
         if (ImGui::MenuItem("Camera")) create_entity(CreateKind::Camera, parent);
         ImGui::TextDisabled("(hold Shift to create under the selection)");
