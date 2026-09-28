@@ -413,3 +413,65 @@ TEST_CASE("picking: request_pick -> async readback -> poll_pick returns the id o
         }
     }
 }
+
+TEST_CASE("point shadows: six faces per light, budget, pass, mixed with spots (ADR-0015)") {
+    Fixture f(true);
+    RenderScene s = f.scene(40);
+    s.lights.clear();
+    auto point = [](Vec3 pos, bool shadows) {
+        RenderLight l;
+        l.type = LightType::Point;
+        l.position = pos;
+        l.range = 20.0f;
+        l.cast_shadows = shadows;
+        return l;
+    };
+    for (int i = 0; i < 5; ++i) {
+        s.lights.push_back(point(Vec3(f32(i) * 4.0f - 8.0f, 3.0f, -5.0f), true));
+    }
+    s.lights.push_back(point(Vec3(0, 3, -5), false));  // no shadows requested
+    s.lights.push_back(point(Vec3(0, 3, 400), true));  // behind the camera, out of view
+    for (RenderMeshInstance& inst : s.instances) {
+        inst.flags |= instance_flags::kCastShadow;
+    }
+    f.frame(s);
+    CHECK(f.r->stats().point_shadow_maps == 2); // default budget
+    CHECK(f.r->stats().spot_shadow_maps == 0);
+    CHECK(f.logged("PointShadowFace"));
+    CHECK_FALSE(f.logged("SpotShadow"));
+
+    f.r->settings().max_point_shadows = 99; // clamped to kMaxPointShadows
+    f.frame(s);
+    CHECK(f.r->stats().point_shadow_maps == kMaxPointShadows);
+
+    // Spots and points share the GpuSpotShadow table (spots first) but use separate maps.
+    RenderLight sp;
+    sp.type = LightType::Spot;
+    sp.position = Vec3(0, 8, -5);
+    sp.direction = Vec3(0, -1, 0);
+    sp.range = 30.0f;
+    sp.cast_shadows = true;
+    s.lights.push_back(sp);
+    f.device.state.log.clear();
+    f.frame(s);
+    CHECK(f.r->stats().spot_shadow_maps == 1);
+    CHECK(f.r->stats().point_shadow_maps == kMaxPointShadows);
+    CHECK(f.logged("SpotShadow"));
+    CHECK(f.logged("PointShadowFace"));
+
+    f.r->settings().point_shadows = false;
+    f.device.state.log.clear();
+    f.frame(s);
+    CHECK(f.r->stats().point_shadow_maps == 0);
+    CHECK_FALSE(f.logged("PointShadowFace"));
+    CHECK(f.r->stats().spot_shadow_maps == 1);
+
+    f.r->settings().point_shadows = true;
+    f.r->settings().point_shadow_map_size = 256; // re-created at the new size
+    f.frame(s);
+    CHECK(f.r->stats().point_shadow_maps == kMaxPointShadows);
+    CHECK(f.device.state.errors.empty());
+    for (const std::string& e : f.device.state.errors) {
+        MESSAGE(e);
+    }
+}

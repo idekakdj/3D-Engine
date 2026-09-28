@@ -123,6 +123,12 @@ struct RendererSettings {
     bool      spot_shadows = true;
     u32       spot_shadow_map_size = 1024;
     u32       max_spot_shadows = 4;
+    // ADR-0015 (additive): shadows for point lights with cast_shadows - six perspective views (a
+    // cube) per light in a second depth array, sampled like the spot maps. The nearest
+    // max_point_shadows (<= 4) point lights whose range reaches the view get one.
+    bool      point_shadows = true;
+    u32       point_shadow_map_size = 512; // per cube face
+    u32       max_point_shadows = 2;
     // ADR-0010 (additive): draw static meshes of the GPU-driven path as meshlets through task +
     // mesh shaders (per-meshlet frustum + backface-cone culling). Needs gpu_culling and
     // DeviceFeatures::mesh_shaders; otherwise the indexed indirect path is used.
@@ -143,6 +149,8 @@ struct RendererStats {
     u32 meshlet_instances = 0;
     // ADR-0012: spot shadow maps rendered this frame.
     u32 spot_shadow_maps = 0;
+    // ADR-0015: point lights with a (6-face) shadow map this frame.
+    u32 point_shadow_maps = 0;
 };
 
 struct RendererDesc {

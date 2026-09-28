@@ -27,6 +27,10 @@ inline constexpr u32 kClusterCount = kClusterX * kClusterY * kClusterZ;
 inline constexpr u32 kMaxLightsPerCluster = 128;
 inline constexpr u32 kMaxCascades = 4;
 inline constexpr u32 kMaxSpotShadows = 8; // ADR-0012: shadow-casting spot lights per frame
+inline constexpr u32 kMaxPointShadows = 4; // ADR-0015: shadow-casting point lights per frame
+inline constexpr u32 kPointShadowFaces = 6; // one perspective view per cube face (+X,-X,+Y,-Y,+Z,-Z)
+// GpuSpotShadow entries per frame: spots first, then 6 consecutive faces per point light.
+inline constexpr u32 kMaxLocalShadowViews = kMaxSpotShadows + kMaxPointShadows * kPointShadowFaces;
 inline constexpr u32 kMaxLights = 4096;       // uploaded per frame (extra lights are dropped)
 inline constexpr u32 kGpuInvalidIndex = 0xFFFF'FFFFu;
 
@@ -94,7 +98,7 @@ struct GpuLight {
     Vec3 color{ 0.0f };     // 32 color * intensity
     f32  spot_scale = 0.0f; // 44 1 / (cos_inner - cos_outer)
     f32  spot_offset = 0.0f;// 48 -cos_outer * spot_scale
-    u32  shadow = kGpuInvalidIndex; // 52 directional: 0 = the cascaded shadow map; spot: GpuSpotShadow index
+    u32  shadow = kGpuInvalidIndex; // 52 directional: 0 = the cascaded shadow map; spot: GpuSpotShadow index; point: first of its 6 face entries (ADR-0015)
     u32  pad0 = 0;
     u32  pad1 = 0;
 };
@@ -182,12 +186,13 @@ static_assert(offsetof(GpuFrame, spot_shadows) == 1016);
 static_assert(offsetof(GpuFrame, spot_shadow_count) == 1028);
 static_assert(sizeof(GpuFrame) == 1032);
 
-// Spot-light shadow (ADR-0012). GpuLight::shadow of a spot light = its index in this array.
+// Local-light shadow view (ADR-0012 spot; ADR-0015 point = 6 consecutive cube-face entries).
+// GpuLight::shadow of a spot light = its index in this array.
 struct GpuSpotShadow {
     Mat4 view_proj{ 1.0f };  // 0  reverse-Z perspective from the light
     f32  texel_scale = 0.0f; // 64 world texel size per metre from the light (2 tan(fov/2) / size)
     u32  layer = 0;          // 68
-    f32  pad0 = 0.0f;
+    u32  map = kGpuInvalidIndex; // 72 ADR-0015: bindless depth array holding `layer` (spot or point map)
     f32  pad1 = 0.0f;
 };
 static_assert(sizeof(GpuSpotShadow) == 80);

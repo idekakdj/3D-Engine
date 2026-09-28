@@ -1,4 +1,4 @@
-// shaders/renderer/shadows.glsl — cascaded shadow map sampling (reverse-Z, compare sampler).
+// shaders/renderer/shadows.glsl — cascaded (sun), spot and point shadow sampling (reverse-Z).
 // The shadow map is a D32F Tex2DArray (one layer per cascade) registered with a
 // GreaterEqual compare sampler: 1 = lit (receiver depth >= stored occluder depth).
 #ifndef AE_SHADOWS_GLSL
@@ -80,10 +80,13 @@ float ae_spot_pcf_tap(uint map, uint layer, vec2 uv, vec2 size, float ref) {
 // Spot shadow term for GpuSpotShadow `index`: 3x3 bilinear taps (tent weights) with a
 // normal-offset bias of ~1.5 shadow texels at the receiver's distance from the light.
 float ae_spot_shadow(FrameData frame, uint index, vec3 world_pos, vec3 geom_normal, vec3 L, float dist) {
-    if (index >= frame.spot_shadow_count || frame.spot_shadow_map == AE_INVALID_INDEX) {
+    if (index >= frame.spot_shadow_count) {
         return 1.0;
     }
     GpuSpotShadow sh = frame.spot_shadows.items[index];
+    if (sh.map == AE_INVALID_INDEX) {
+        return 1.0;
+    }
     float NoL = clamp(dot(geom_normal, L), 0.0, 1.0);
     float texel_world = sh.texel_scale * dist;
     vec3  p = world_pos + geom_normal * texel_world * (1.5 - 0.75 * NoL);
@@ -97,18 +100,37 @@ float ae_spot_shadow(FrameData frame, uint index, vec3 world_pos, vec3 geom_norm
         return 1.0; // outside the shadow frustum (very wide cones are capped)
     }
     float ref = clamp(ndc.z, 0.0, 1.0);
-    vec2  size = vec2(textureSize(AE_TEX2DARRAY(frame.spot_shadow_map), 0).xy);
+    vec2  size = vec2(textureSize(AE_TEX2DARRAY(sh.map), 0).xy);
     vec2  texel = 1.0 / size;
     float sum = 0.0;
     float wsum = 0.0;
     for (int y = -1; y <= 1; ++y) {
         for (int x = -1; x <= 1; ++x) {
             float w = (x == 0 ? 2.0 : 1.0) * (y == 0 ? 2.0 : 1.0);
-            sum += w * ae_spot_pcf_tap(frame.spot_shadow_map, sh.layer, uv + vec2(x, y) * texel, size, ref);
+            sum += w * ae_spot_pcf_tap(sh.map, sh.layer, uv + vec2(x, y) * texel, size, ref);
             wsum += w;
         }
     }
     return sum / wsum;
+}
+
+// ---- point-light shadows (ADR-0015) ---------------------------------------------------------
+// Six consecutive GpuSpotShadow entries (+X, -X, +Y, -Y, +Z, -Z) starting at GpuLight::shadow.
+// The face is picked by the major axis of light -> receiver (render_math.cpp point_shadow_face_for);
+// each face view is a little wider than 90 degrees, so its PCF footprint never leaves the face.
+uint ae_point_shadow_face(vec3 dir) {
+    vec3 a = abs(dir);
+    if (a.x >= a.y && a.x >= a.z) {
+        return dir.x >= 0.0 ? 0u : 1u;
+    }
+    if (a.y >= a.z) {
+        return dir.y >= 0.0 ? 2u : 3u;
+    }
+    return dir.z >= 0.0 ? 4u : 5u;
+}
+
+float ae_point_shadow(FrameData frame, uint first, vec3 world_pos, vec3 geom_normal, vec3 L, float dist) {
+    return ae_spot_shadow(frame, first + ae_point_shadow_face(-L), world_pos, geom_normal, L, dist);
 }
 
 #endif

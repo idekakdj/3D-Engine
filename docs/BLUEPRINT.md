@@ -4,7 +4,7 @@
 > across rendering fidelity, editor/tooling, physics/animation, and scripting/gameplay.
 >
 > **Status:** Foundation phase (multi-session project). **Author:** Engine architect (orchestrator).
-> **Doc version:** 1.14 (ADR-0014 applied). Update this header on every material revision.
+> **Doc version:** 1.15 (ADR-0015 applied). Update this header on every material revision.
 
 ---
 
@@ -553,6 +553,7 @@ until it builds and its acceptance check passes.
 - **v1.12** — ADR-0012: spot-light shadows (ADR-0009 graphics stretch 2); delivery as a downloadable local app made explicit.
 - **v1.13** — ADR-0013: installable build — install rules, CPack ZIP + Inno Setup installer, Documents workspace.
 - **v1.14** — ADR-0014: application identity (icon, version info, splash), File > New / Open Project, precompiled shaders.
+- **v1.15** — ADR-0015: point-light shadows (six-view cube shadows sharing the spot-shadow path).
 
 ---
 
@@ -1204,3 +1205,45 @@ camera; Open Project and Recent Projects list every project and switch between t
 editor logged `pipelines built in 14 ms (shaders: 29 precompiled, 0 cached, 0 compiled)`.
 
 **Not done yet:** code signing, a per-shader dependency hash (so one edit only recompiles its dependants).
+
+## ADR-0015 — Point-light shadows (2026-09-28)
+
+**Status:** accepted; verified on Linux (llvmpipe). First of the owner's "Unreal-style" feature
+list (point shadows, then global illumination).
+
+**Decisions**
+1. **Six perspective views, not a cube map.** A shadow-casting point light gets six reverse-Z
+   perspective views (+X, -X, +Y, -Y, +Z, -Z; `render_math.h point_shadow_face`) rendered into
+   layers of a second D32F array, `PointShadowMaps` (`point_shadow_map_size` per face, default 512;
+   6 x `max_point_shadows` layers). They are ordinary entries of the ADR-0012 `GpuSpotShadow`
+   table (spots first, then 6 consecutive faces per point light; `GpuLight::shadow` = the first
+   face), so the mesh / meshlet shaders, `view_index`, CPU culling and the shadow pass code are
+   shared, and sampling is the same textureGather + in-shader compare (works on llvmpipe, ADR-0004).
+   No cube-map sampling, no linear-distance depth format, no geometry-shader or multiview need.
+2. **Seamless faces.** The shader picks the face by the major axis of light -> receiver
+   (`ae_point_shadow_face`, mirrored by `point_shadow_face_for` on the CPU). Each face's field of view
+   is slightly wider than 90 degrees (`kPointShadowMarginTexels` = 5 texels on each side), so the
+   PCF footprint (normal offset + 3x3 taps + bilinear quad) of any receiver stays inside the face it
+   selected; there is no seam and no light leak at face edges (unit-tested over 2000 directions and
+   the eight cube corners).
+3. **Data (additive).** `GpuSpotShadow::pad0` became `map` (the bindless index of the array that
+   holds the entry: spot or point map); `GpuFrame` is unchanged (1032 B). `kMaxPointShadows` = 4,
+   `kMaxLocalShadowViews` = 8 + 4 x 6 = 32 GpuSpotShadow entries per frame. `RendererSettings` gained
+   `point_shadows` (on), `point_shadow_map_size` (512), `max_point_shadows` (2);
+   `RendererStats::point_shadow_maps`. Selection mirrors spots: point lights with `cast_shadows`
+   whose range sphere reaches the view, nearest first, within the budget. The Engine panel has a
+   "Point shadows" switch and shows the count. `LightComponent::cast_shadows` stays off by default;
+   the showcase's orange "Lamp" now casts shadows.
+4. **Cost.** Six depth passes per shadowed light (each CPU-culled against its face frustum); at the
+   default budget 2 x 6 x 512^2 D32F = 12 MB.
+
+**Verification (Linux).** `test.renderer` +2 cases (six faces per light, budget + clamp, the pass
+runs, spots and points together with separate maps, the switch, a size change; face selection +
+footprint containment). New golden case `point_shadows` (a lamp among six pillars, a ball below it
+and a back wall: radial shadows across every horizontal face and the -Y face, no seams); ctest 27/27
+(cascaded `shadows` skipped on llvmpipe as before). Editor self-test, player check and vertical
+slice pass validation-clean with the showcase lamp shadowed.
+
+**Not done yet:** Arc reference image for `point_shadows`; per-face culling of views that see no
+receiver in the camera frustum; shadow caching for static lights (re-render only when something in
+range moves).

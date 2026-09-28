@@ -235,6 +235,25 @@ const std::vector<GoldenCase>& cases() {
                         glm::quatLookAt(glm::normalize(Vec3(-0.7f, -0.7f, 0.1f)), Vec3(0, 1, 0)), 12.0f, true);
               c.b.camera(Vec3(0.0f, 5.5f, 8.0f), 0.0f, -32.0f);
           } },
+        { "point_shadows", "a shadow-casting point light among pillars and a back wall (ADR-0015)", false,
+          [](CaseContext& c) {
+              flat_environment(c, Vec3(0.01f));
+              const AssetId floor = c.b.material("floor", Vec3(0.75f), 0.0f, 0.8f);
+              const AssetId grey  = c.b.material("grey", Vec3(0.6f), 0.0f, 0.5f);
+              c.b.mesh("Floor", BuiltinMesh::Plane, floor, Vec3(0.0f));
+              c.b.mesh("Wall", BuiltinMesh::Cube, floor, Vec3(0.0f, 1.5f, -3.2f), Vec3(9.0f, 3.0f, 0.2f));
+              // Pillars all around the lamp: shadows fall across every horizontal cube face and
+              // the face seams (diagonals), onto the floor and the wall.
+              for (int i = 0; i < 6; ++i) {
+                  const f32 a = glm::radians(30.0f + 60.0f * f32(i));
+                  c.b.mesh("Pillar", BuiltinMesh::Cube, grey, Vec3(std::cos(a) * 1.6f, 0.6f, std::sin(a) * 1.6f - 0.4f),
+                           Vec3(0.3f, 1.2f, 0.3f));
+              }
+              c.b.mesh("Ball", BuiltinMesh::Sphere, grey, Vec3(0.0f, 0.35f, -0.4f), Vec3(0.7f));
+              c.b.light(LightKind::Point, Vec3(1.0f, 0.9f, 0.75f), 30.0f, Vec3(0.0f, 1.5f, -0.4f), Quat(1, 0, 0, 0), 12.0f,
+                        true);
+              c.b.camera(Vec3(0.0f, 5.0f, 6.5f), 0.0f, -38.0f);
+          } },
         { "shadows", "cascaded sun shadows from a column of cubes", true,
           [](CaseContext& c) {
               const AssetId floor = c.b.material("floor", Vec3(0.8f), 0.0f, 0.7f);

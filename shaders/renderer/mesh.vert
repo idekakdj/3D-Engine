@@ -56,7 +56,7 @@ void main() {
     v_uv = in_uv;
     v_instance = uint(gl_InstanceIndex);
 
-    // 0 = camera, 1 + i = shadow cascade i, 1 + AE_MAX_CASCADES + j = spot shadow j (ADR-0012).
+    // 0 = camera, 1 + i = shadow cascade i, 1 + AE_MAX_CASCADES + j = local shadow view j (spot ADR-0012 / point face ADR-0015).
     mat4 view_proj = pc.view_index == 0u                          ? frame.view_proj
                      : pc.view_index <= uint(AE_MAX_CASCADES)     ? frame.cascade_view_proj[pc.view_index - 1u]
                                                                   : frame.spot_shadows.items[pc.view_index - 1u - uint(AE_MAX_CASCADES)].view_proj;

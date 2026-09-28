@@ -97,6 +97,7 @@ RendererImpl::~RendererImpl() {
     destroy_ibl_texture(device_, brdf_lut_);
     destroy_persistent(shadow_map_);
     destroy_persistent(spot_shadow_map_);
+    destroy_persistent(point_shadow_map_);
     destroy_persistent(history_[0]);
     destroy_persistent(history_[1]);
     for (rhi::BufferHandle* b : { &visibility_buffer_, &readback_buffer_ }) {

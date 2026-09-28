@@ -113,12 +113,13 @@ layout(buffer_reference, scalar, buffer_reference_align = 8) readonly buffer Ski
 // Aligned operand from the pointee's buffer_reference_align (must be >= 8 for a 64-bit pointer).
 layout(buffer_reference, scalar, buffer_reference_align = 16) readonly buffer UserIdBuffer { uint items[]; };
 
-// Spot-light shadows (ADR-0012; gpu_data.h GpuSpotShadow): one per shadow-casting spot this frame.
+// Local-light shadow views (gpu_data.h GpuSpotShadow): one per shadow-casting spot (ADR-0012),
+// then 6 consecutive cube-face views per shadow-casting point light (ADR-0015).
 struct GpuSpotShadow {
     mat4  view_proj;   // reverse-Z perspective from the light
     float texel_scale; // world size of one shadow texel per metre of distance from the light
-    uint  layer;       // layer of the spot shadow array
-    float pad0;
+    uint  layer;       // layer of the shadow array `map`
+    uint  map;         // bindless sampler2DArray (depth, point clamp): the spot or the point map
     float pad1;
 };
 layout(buffer_reference, scalar, buffer_reference_align = 16) readonly buffer SpotShadowBuffer { GpuSpotShadow items[]; };
@@ -180,7 +181,7 @@ layout(buffer_reference, scalar, buffer_reference_align = 16) readonly buffer Fr
     UserIdBuffer user_ids; // RenderMeshInstance::user_id, written on pick frames only
     SpotShadowBuffer spot_shadows; // ADR-0012
     uint  spot_shadow_map;         // sampler2DArray (depth, point clamp; gathered + compared in-shader)
-    uint  spot_shadow_count;
+    uint  spot_shadow_count;       // GpuSpotShadow entries (spot views + point faces)
 };
 
 vec3 ae_safe_normalize(vec3 v) { return v * inversesqrt(max(dot(v, v), 1e-12)); }

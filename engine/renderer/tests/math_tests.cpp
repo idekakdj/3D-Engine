@@ -205,3 +205,43 @@ TEST_CASE("float -> half conversion") {
     CHECK(full_mip_count(1024, 512) == 11);
     CHECK(full_mip_count(1, 1) == 1);
 }
+
+TEST_CASE("point shadow faces: major-axis selection keeps the PCF footprint inside the face (ADR-0015)") {
+    CHECK(point_shadow_face_for(Vec3(1, 0.2f, -0.3f)) == 0u);
+    CHECK(point_shadow_face_for(Vec3(-1, 0.2f, 0.3f)) == 1u);
+    CHECK(point_shadow_face_for(Vec3(0.1f, 2, 0.3f)) == 2u);
+    CHECK(point_shadow_face_for(Vec3(0.1f, -2, 0.3f)) == 3u);
+    CHECK(point_shadow_face_for(Vec3(0.1f, 0.2f, 3)) == 4u);
+    CHECK(point_shadow_face_for(Vec3(0.1f, 0.2f, -3)) == 5u);
+
+    const u32  size = 512;
+    const f32  tan_half = point_shadow_tan_half_fov(size);
+    CHECK(tan_half > 1.0f);
+    const f32  inner = static_cast<f32>(kPointShadowMarginTexels) / static_cast<f32>(size) - 1e-4f;
+    const Vec3 light(2.0f, 1.0f, -3.0f);
+    const Mat4 proj = to_reverse_z(perspective(2.0f * std::atan(tan_half), 1.0f, 0.1f, 50.0f), 0.1f);
+    u32 seed = 12345u;
+    auto rnd = [&seed] {
+        seed = seed * 1664525u + 1013904223u;
+        return static_cast<f32>(seed >> 8) / static_cast<f32>(1u << 24) * 2.0f - 1.0f;
+    };
+    for (int i = 0; i < 2000; ++i) {
+        Vec3 dir(rnd(), rnd(), rnd());
+        if (i < 8) { // exact cube corners: the worst case
+            dir = Vec3((i & 1) ? 1.0f : -1.0f, (i & 2) ? 1.0f : -1.0f, (i & 4) ? 1.0f : -1.0f);
+        }
+        if (glm::length(dir) < 1e-3f) {
+            continue;
+        }
+        const u32             f = point_shadow_face_for(dir);
+        const PointShadowFace face = point_shadow_face(f);
+        const Mat4            vp = proj * look_at(light, light + face.forward, face.up);
+        const Vec4            clip = vp * Vec4(light + glm::normalize(dir) * 5.0f, 1.0f);
+        REQUIRE(clip.w > 0.0f);
+        const Vec2 uv = Vec2(clip) / clip.w * 0.5f + 0.5f;
+        CHECK(uv.x >= inner);
+        CHECK(uv.y >= inner);
+        CHECK(uv.x <= 1.0f - inner);
+        CHECK(uv.y <= 1.0f - inner);
+    }
+}

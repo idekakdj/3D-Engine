@@ -111,6 +111,8 @@ void main() {
             if (atten > 0.0 && l.shadow != AE_INVALID_INDEX) {
                 atten *= ae_spot_shadow(frame, l.shadow, v_world_pos, Ng, L, d); // ADR-0012
             }
+        } else if (atten > 0.0 && l.shadow != AE_INVALID_INDEX) {
+            atten *= ae_point_shadow(frame, l.shadow, v_world_pos, Ng, L, d); // ADR-0015
         }
         if (atten > 0.0) {
             color += ae_evaluate_brdf(N, V, L, diffuse_color, f0, alpha, energy_comp) * l.color * atten;

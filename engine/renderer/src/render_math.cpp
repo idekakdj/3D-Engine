@@ -183,6 +183,33 @@ Sphere spot_bounding_sphere(const Vec3& apex, const Vec3& dir, f32 range, f32 co
     return s;
 }
 
+PointShadowFace point_shadow_face(u32 f) {
+    switch (f) {
+    case 0: return { Vec3(1.0f, 0.0f, 0.0f), Vec3(0.0f, 1.0f, 0.0f) };
+    case 1: return { Vec3(-1.0f, 0.0f, 0.0f), Vec3(0.0f, 1.0f, 0.0f) };
+    case 2: return { Vec3(0.0f, 1.0f, 0.0f), Vec3(0.0f, 0.0f, 1.0f) };
+    case 3: return { Vec3(0.0f, -1.0f, 0.0f), Vec3(0.0f, 0.0f, 1.0f) };
+    case 4: return { Vec3(0.0f, 0.0f, 1.0f), Vec3(0.0f, 1.0f, 0.0f) };
+    default: return { Vec3(0.0f, 0.0f, -1.0f), Vec3(0.0f, 1.0f, 0.0f) };
+    }
+}
+
+u32 point_shadow_face_for(const Vec3& dir) {
+    const Vec3 a = glm::abs(dir);
+    if (a.x >= a.y && a.x >= a.z) {
+        return dir.x >= 0.0f ? 0u : 1u;
+    }
+    if (a.y >= a.z) {
+        return dir.y >= 0.0f ? 2u : 3u;
+    }
+    return dir.z >= 0.0f ? 4u : 5u;
+}
+
+f32 point_shadow_tan_half_fov(u32 size) {
+    const f32 s = static_cast<f32>(std::max(size, 4u * kPointShadowMarginTexels));
+    return s / (s - 2.0f * static_cast<f32>(kPointShadowMarginTexels));
+}
+
 f32 distance_attenuation(f32 distance, f32 range) {
     const f32 d2 = distance * distance;
     const f32 r = std::max(range, 1e-4f);

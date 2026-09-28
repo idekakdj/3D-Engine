@@ -141,12 +141,20 @@ private:
         bool skinned = false; // skinned pipeline permutation
         bool double_sided = false;
     };
-    // ADR-0012: one shadow-casting spot light this frame.
+    // ADR-0012: one shadow view of a local light this frame (a spot, or one cube face of a point
+    // light - ADR-0015). Index = GpuSpotShadow entry = view_index - 1 - kMaxCascades.
     struct SpotShadowSetup {
         u32     light = 0;        // index into gpu_lights_
         Mat4    view_proj{ 1.0f };
         Frustum frustum{};
         f32     texel_scale = 0.0f;
+        u32     layer = 0;        // layer of spot_shadow_map_ or point_shadow_map_
+        bool    point = false;    // lives in point_shadow_map_
+    };
+    struct PointCandidate {
+        u32  light = 0;
+        Vec3 position{ 0.0f };
+        f32  range = 1.0f;
     };
     struct SpotCandidate {
         u32  light = 0;
@@ -202,9 +210,12 @@ private:
     void write_frame_constants(const RenderScene& scene, GpuFrame& f, u64 instances, u64 materials,
                                u64 lights, u64 joints, u64 lines);
     void ensure_shadow_map();
-    void setup_spot_shadows();
+    void setup_spot_shadows(); // spot (ADR-0012) + point (ADR-0015) shadow views
+    void setup_spot_views();
+    void setup_point_views();
     void cull_spot_shadows(const RenderScene& scene);
     void ensure_spot_shadow_map();
+    void ensure_point_shadow_map();
     void ensure_history();
     void draw_items(rhi::CommandList& cmd, std::span<const DrawItem> items, MeshPush push,
                     bool count_stats);
@@ -253,6 +264,7 @@ private:
     IblTexture                       brdf_lut_{};
     PersistentTexture                shadow_map_{};
     PersistentTexture                spot_shadow_map_{};  // ADR-0012: D32F array, point-clamp sampled
+    PersistentTexture                point_shadow_map_{}; // ADR-0015: D32F array, 6 layers per point light
     std::array<PersistentTexture, 2> history_{};
     u32                              history_index_ = 0;
     bool                             history_valid_ = false;
@@ -276,7 +288,8 @@ private:
     std::array<std::vector<DrawItem>, kMaxCascades> cascade_draws_;
     std::vector<SpotCandidate>                       spot_candidates_;
     std::vector<SpotShadowSetup>                     spot_shadows_;
-    std::array<std::vector<DrawItem>, kMaxSpotShadows> spot_draws_;
+    std::vector<PointCandidate>                      point_candidates_;
+    std::array<std::vector<DrawItem>, kMaxLocalShadowViews> spot_draws_;
     u64                           frame_gpu_address_ = 0;
     u32                           line_vertex_count_ = 0;
     u32                           frame_slot_ = 0;

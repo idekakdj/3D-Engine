@@ -103,6 +103,22 @@ struct Sphere {
 [[nodiscard]] Sphere spot_bounding_sphere(const Vec3& apex, const Vec3& dir, f32 range,
                                           f32 cos_outer);
 
+// ---- point-light shadows (ADR-0015) ----
+// Cube face `f` (0..5 = +X, -X, +Y, -Y, +Z, -Z): view direction + up vector of its shadow view.
+struct PointShadowFace {
+    Vec3 forward{ 1.0f, 0.0f, 0.0f };
+    Vec3 up{ 0.0f, 1.0f, 0.0f };
+};
+[[nodiscard]] PointShadowFace point_shadow_face(u32 f);
+// Face whose view contains `dir` (light -> receiver) by its major axis; mirrors
+// shadows.glsl::ae_point_shadow_face (ties go to X, then Y).
+[[nodiscard]] u32 point_shadow_face_for(const Vec3& dir);
+// Texels kept around the 90-degree core of each face so the shader's PCF footprint (normal
+// offset + 3x3 taps + bilinear quad) never leaves the face it selected.
+inline constexpr u32 kPointShadowMarginTexels = 5;
+// tan(fov / 2) of a face view of `size` texels (slightly above 1).
+[[nodiscard]] f32 point_shadow_tan_half_fov(u32 size);
+
 // ---------------------------------------------------------------------------
 // Hi-Z occlusion (ADR-0009). CPU reference of hiz_build.comp + gpu_cull.comp::occluded().
 // Reverse-Z: nearer = LARGER depth; every Hi-Z texel stores the MIN (farthest) depth of the

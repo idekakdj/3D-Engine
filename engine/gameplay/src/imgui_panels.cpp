@@ -52,7 +52,8 @@ void draw_engine_stats(Application& app, bool* open) {
         ImGui::Text("GPU %.2f ms   CPU record %.2f ms", fs.gpu_time_ms, rs.cpu_record_ms);
         ImGui::Text("instances %u / %u visible, %u draws, %u lights", rs.instances_visible, rs.instances_submitted,
                     rs.draw_calls, rs.lights);
-        ImGui::Text("triangles %u, spot shadow maps %u", rs.triangles, rs.spot_shadow_maps);
+        ImGui::Text("triangles %u, shadow maps: spot %u, point %u", rs.triangles, rs.spot_shadow_maps,
+                    rs.point_shadow_maps);
         renderer::RendererSettings& settings = app.renderer().settings();
         ImGui::Checkbox("Shadows", &settings.shadows);
         if (ImGui::IsItemHovered()) {
@@ -60,6 +61,7 @@ void draw_engine_stats(Application& app, bool* open) {
         }
         ImGui::SameLine();
         ImGui::Checkbox("Spot shadows", &settings.spot_shadows);
+        ImGui::Checkbox("Point shadows", &settings.point_shadows);
         ImGui::SameLine();
         ImGui::Checkbox("SSAO", &settings.ssao);
         ImGui::SameLine();
