@@ -63,9 +63,9 @@ void imgui_init(Device& device, Window& window) {
 
     ImGui::StyleColorsDark();
     ImGuiStyle& style = ImGui::GetStyle();
+    style.Colors[ImGuiCol_WindowBg].w = 1.0f; // opaque floating panels (the dark theme's is translucent)
     if (io.ConfigFlags & ImGuiConfigFlags_ViewportsEnable) {
-        style.WindowRounding              = 0.0f; // platform windows look native
-        style.Colors[ImGuiCol_WindowBg].w = 1.0f;
+        style.WindowRounding = 0.0f; // platform windows look native
     }
 
     ImGui_ImplGlfw_InitForVulkan(static_cast<GLFWwindow*>(window.glfw_handle()), true);

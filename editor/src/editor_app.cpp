@@ -27,6 +27,7 @@
 #include "aether/scripting/components.h"
 
 #include <imgui.h> // before ImGuizmo.h, which does not include it
+#include <imgui_internal.h> // FindWindowByName (dock the Visual Script window by the Viewport)
 #include <ImGuizmo.h>
 
 #include <algorithm>
@@ -173,7 +174,8 @@ void EditorApp::on_imgui() {
         draw_animation_panel();
     }
     if (show_graph_ && graph_editor_) {
-        graph_editor_->draw(&show_graph_);
+        const ImGuiWindow* vp = ImGui::FindWindowByName("Viewport");
+        graph_editor_->draw(&show_graph_, vp != nullptr ? vp->DockId : 0u);
     }
     if (show_assets_) {
         draw_assets();
@@ -312,7 +314,12 @@ void EditorApp::on_render_frame(rhi::FrameInfo& frame, renderer::RenderScene& sc
         target.texture       = viewport_.texture;
         target.format        = rhi::Format::RGBA8Unorm;
         target.extent        = viewport_.size;
-        target.initial_state = rhi::ResourceState::Undefined;
+        // The image is re-rendered every frame while the PREVIOUS frame's UI pass may still be sampling
+        // it (frames overlap on real GPUs). Declaring its real state (ShaderRead) makes the renderer's
+        // first barrier wait for those reads; "Undefined" would skip that wait and let this frame's
+        // clear / draw race the previous frame's display of it - a random whole-viewport flicker.
+        target.initial_state = viewport_.rendered ? rhi::ResourceState::ShaderRead : rhi::ResourceState::Undefined;
+        viewport_.rendered   = true;
         target.final_state   = rhi::ResourceState::ShaderRead; // sampled by ImGui below
         renderer().render(scene, *frame.cmd, target);
     }

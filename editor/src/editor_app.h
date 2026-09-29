@@ -238,6 +238,7 @@ private:
         u64                imgui_id = 0;
         UVec2              size{ 0, 0 };
         u64                retire_frame = 0;
+        bool               rendered = false; // left in ShaderRead by a previous frame
     };
     ViewportTarget              viewport_;
     std::vector<ViewportTarget> retired_;

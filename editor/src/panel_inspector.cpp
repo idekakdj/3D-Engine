@@ -545,12 +545,17 @@ void EditorApp::draw_inspector() {
                 if (ImGui::Button("Edit Graph")) {
                     open_graph(std::filesystem::path("scripts") / sc->script);
                 }
-            } else if (sc->script.empty() && play_state_ == PlayState::Edit) {
+            } else if (sc->script.empty()) {
+                // Shown while playing too (greyed out), so it never silently disappears.
+                const bool editing = play_state_ == PlayState::Edit;
+                ImGui::BeginDisabled(!editing);
                 if (ImGui::Button("New Visual Script")) {
                     new_graph_for(e);
                 }
-                if (ImGui::IsItemHovered()) {
-                    ImGui::SetTooltip("Creates scripts/<name>.aegraph with a starter graph and opens the node editor");
+                ImGui::EndDisabled();
+                if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+                    ImGui::SetTooltip(editing ? "Creates scripts/<name>.aegraph with a starter graph and opens the node editor"
+                                              : "Stop playing first: changes made while playing are undone when you stop");
                 }
             }
             changed |= with("Script enabled").toggle(ImGui::Checkbox("Enabled##script", &sc->enabled));

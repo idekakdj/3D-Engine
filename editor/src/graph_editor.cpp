@@ -297,11 +297,16 @@ u32 GraphEditor::node_at(const Vec2& screen, const Vec2& origin) const {
 // =================================================================================================
 // UI
 // =================================================================================================
-void GraphEditor::draw(bool* p_open) {
+void GraphEditor::draw(bool* p_open, unsigned int dock_id) {
     if (!is_open()) {
         return;
     }
     ImGui::SetNextWindowSize(ImVec2(1000.0f, 620.0f), ImGuiCond_FirstUseEver);
+    if (!docked_once_ && dock_id != 0) { // open as a tab next to the Viewport (once per session)
+        ImGui::SetNextWindowDockID(dock_id, ImGuiCond_Always);
+        ImGui::SetNextWindowFocus();
+    }
+    docked_once_ = true;
     const std::string title = std::format("Visual Script - {}{}###VisualScript", display_, dirty_ ? " *" : "");
     if (!ImGui::Begin(title.c_str(), p_open, ImGuiWindowFlags_MenuBar)) {
         ImGui::End();

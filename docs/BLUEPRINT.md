@@ -1504,3 +1504,16 @@ variable all worked. Fixes:
 * Confirmed: fullscreen UI scaling, the depth-tested grid, and a user-made graph (key C hides an
   entity).
 
+**Owner feedback, round 3 (Intel Arc, 2026-09-29).**
+* **Remaining random flicker: a synchronisation bug.** The editor declared its viewport image
+  `Undefined` at the start of every frame. That barrier does not wait for earlier work, so on a real
+  GPU (frames overlap; llvmpipe runs them serially and never showed it) this frame's clear / render
+  of the image could race the previous frame's UI pass, which was still sampling it to draw it on
+  screen. The image is now declared `ShaderRead` after its first frame, so the renderer's first
+  barrier waits for those reads. No other persistent texture used a hard-coded `Undefined`.
+* The **Visual Script** window opens as a tab next to the Viewport (once per session, then it
+  stays where the user puts it). Floating panels are opaque now: the dark theme's translucent
+  window background had only been made opaque while multi-viewports were on.
+* The inspector's **New Visual Script** button is shown disabled while playing ("stop playing
+  first"), instead of disappearing.
+

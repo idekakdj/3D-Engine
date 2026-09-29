@@ -29,8 +29,9 @@ public:
     bool save();
     void close();
 
-    // The editor window. `open` is the View-menu flag.
-    void draw(bool* p_open);
+    // The editor window. `p_open` is the View-menu flag. `dock_id` (the Viewport's dock node, 0 =
+    // none) receives the window as a tab the first time it is drawn in a session.
+    void draw(bool* p_open, unsigned int dock_id = 0);
 
     [[nodiscard]] bool                         is_open() const noexcept { return !file_.empty(); }
     [[nodiscard]] bool                         dirty() const noexcept { return dirty_; }
@@ -88,6 +89,7 @@ private:
     char                            search_[64] = {};
     bool                            show_lua_ = false;
     u32                             focus_node_ = 0; // scroll to this node next frame
+    bool                            docked_once_ = false;
 };
 
 } // namespace aether::editor
