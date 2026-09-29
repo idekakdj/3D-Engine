@@ -7,6 +7,7 @@
 #include "aether/core/input.h"
 #include "aether/core/log.h"
 #include "aether/core/paths.h"
+#include "aether/core/paths_ext.h"
 #include "aether/editor/console.h"
 #include "aether/editor/material_instance.h"
 #include "aether/editor/prefab.h"
@@ -29,6 +30,9 @@
 #include <ImGuizmo.h>
 
 #include <algorithm>
+#include <cmath>
+#include <cstdlib>
+#include <fstream>
 #include <cctype>
 
 namespace aether::editor {
@@ -153,6 +157,8 @@ void EditorApp::on_update(const FrameTime& time) {
 }
 
 void EditorApp::on_imgui() {
+    apply_ui_scale();
+    grid_this_frame_ = false; // the scene viewport sets it when it shows the grid
     ImGui::GetIO().ConfigWindowsMoveFromTitleBarOnly = true; // viewport drags box-select, not move
     ImGuizmo::BeginFrame();
     draw_menu_bar();
@@ -225,6 +231,53 @@ void EditorApp::on_imgui() {
 }
 
 void EditorApp::on_render_frame(rhi::FrameInfo& frame, renderer::RenderScene& scene) {
+    // Ground grid on y = 0: depth-tested debug lines around the camera, split into short segments whose
+    // alpha fades with distance (dense far-away lines would otherwise pile up into bright bands).
+    // Major line every 10 cells; the X axis is red, the Z axis blue.
+    if (grid_this_frame_) {
+        const f32  s = std::max(snap_.grid_spacing, 0.01f);
+        const f32  radius = std::min(static_cast<f32>(std::clamp(snap_.grid_extent, 1, 400)) * s,
+                                     std::max(40.0f, std::abs(camera_.position.y) * 8.0f));
+        const Vec3 cam = camera_.position;
+        const i32  n = static_cast<i32>(std::ceil(radius / s));
+        const i32  cx = static_cast<i32>(std::floor(cam.x / s));
+        const i32  cz = static_cast<i32>(std::floor(cam.z / s));
+        const i32  segs = 16;
+        auto       fade = [&](const Vec3& p, u32 rgb, f32 alpha) {
+            const f32 d = glm::length(Vec2(p.x - cam.x, p.z - cam.z)) / radius;
+            const f32 a = alpha * std::clamp(1.0f - d * d, 0.0f, 1.0f);
+            return (static_cast<u32>(a * 255.0f + 0.5f) << 24) | rgb; // RGBA8, R in the low byte
+        };
+        auto line = [&](const Vec3& a, const Vec3& b, u32 rgb, f32 alpha) {
+            for (i32 k = 0; k < segs; ++k) {
+                const Vec3 p0 = glm::mix(a, b, static_cast<f32>(k) / static_cast<f32>(segs));
+                const Vec3 p1 = glm::mix(a, b, static_cast<f32>(k + 1) / static_cast<f32>(segs));
+                const u32  c0 = fade(p0, rgb, alpha);
+                const u32  c1 = fade(p1, rgb, alpha);
+                if ((c0 >> 24) != 0 || (c1 >> 24) != 0) {
+                    scene.debug_lines.push_back(renderer::RenderLine{ p0, p1, c0, c1 });
+                }
+            }
+        };
+        for (i32 i = -n; i <= n; ++i) {
+            const i32 gx = cx + i; // line x = gx * s, along Z
+            const i32 gz = cz + i; // line z = gz * s, along X
+            const f32 x = static_cast<f32>(gx) * s;
+            const f32 z = static_cast<f32>(gz) * s;
+            const f32 z0 = static_cast<f32>(cz - n) * s, z1 = static_cast<f32>(cz + n) * s;
+            const f32 x0 = static_cast<f32>(cx - n) * s, x1 = static_cast<f32>(cx + n) * s;
+            if (gx == 0) {
+                line(Vec3(x, 0.0f, z0), Vec3(x, 0.0f, z1), 0xE07050u, 0.8f); // Z axis (blue)
+            } else {
+                line(Vec3(x, 0.0f, z0), Vec3(x, 0.0f, z1), gx % 10 == 0 ? 0x606060u : 0x808080u, gx % 10 == 0 ? 0.7f : 0.45f);
+            }
+            if (gz == 0) {
+                line(Vec3(x0, 0.0f, z), Vec3(x1, 0.0f, z), 0x5050E0u, 0.8f); // X axis (red)
+            } else {
+                line(Vec3(x0, 0.0f, z), Vec3(x1, 0.0f, z), gz % 10 == 0 ? 0x606060u : 0x808080u, gz % 10 == 0 ? 0.7f : 0.45f);
+            }
+        }
+    }
     // Outline the selected GI volume (ADR-0016, yellow) / reflection probe (ADR-0017, light blue)
     // in edit mode; grey while disabled. RGBA8 packed with R in the low byte.
     auto outline = [&scene](const Vec3& lo, const Vec3& hi, u32 col) {
@@ -840,6 +893,55 @@ bool EditorApp::new_graph_for(Entity e) {
     record_edit("New visual script");
     show_graph_ = true;
     return true;
+}
+
+} // namespace aether::editor
+
+// =================================================================================================
+// UI scale + editor preferences
+// =================================================================================================
+namespace aether::editor {
+
+void EditorApp::apply_ui_scale() {
+    ImGuiStyle& style = ImGui::GetStyle();
+    if (!base_style_) {
+        base_style_ = std::make_unique<ImGuiStyle>(style); // the unscaled style, captured once
+        load_editor_prefs();
+    }
+    f32 scale = ui_scale_setting_;
+    if (scale <= 0.0f) { // auto: proportional to the window height (900 px = 100%), 5 % steps
+        const f32 h = ImGui::GetIO().DisplaySize.y;
+        scale = h > 0.0f ? std::clamp(std::round(h / 900.0f * 20.0f) / 20.0f, 1.0f, 3.0f) : 1.0f;
+    }
+    if (std::abs(scale - ui_scale_applied_) < 0.001f) {
+        return;
+    }
+    style = *base_style_;
+    style.ScaleAllSizes(scale);
+    style.FontScaleMain = scale;
+    ui_scale_applied_ = scale;
+}
+
+void EditorApp::save_editor_prefs() const {
+    const std::filesystem::path file = paths::cache_dir() / "editor_prefs.json";
+    std::error_code             ec;
+    std::filesystem::create_directories(file.parent_path(), ec);
+    std::ofstream out(file, std::ios::binary | std::ios::trunc);
+    out << std::format("{{\n  \"ui_scale\": {}\n}}\n", ui_scale_setting_);
+}
+
+void EditorApp::load_editor_prefs() {
+    std::ifstream in(paths::cache_dir() / "editor_prefs.json", std::ios::binary);
+    if (!in) {
+        return;
+    }
+    const std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    const auto        key = text.find("\"ui_scale\"");
+    const auto        colon = key == std::string::npos ? std::string::npos : text.find(':', key);
+    if (colon != std::string::npos) {
+        const f32 v = std::strtof(text.c_str() + colon + 1, nullptr);
+        ui_scale_setting_ = std::isfinite(v) && v >= 0.5f && v <= 4.0f ? v : 0.0f;
+    }
 }
 
 } // namespace aether::editor

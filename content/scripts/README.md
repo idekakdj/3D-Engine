@@ -148,6 +148,10 @@ error isolation and hot reload.
   flow. Actions: *Print*, *Set Position*, *Set World Position*, *Move By*, *Rotate*,
   *Set Scale*, *Set Visible*, *Look At*, *Spawn Entity*, *Destroy Entity*, *Emit Event* and
   *Set Variable*.
+* **Smooth motion:** *Move By Over Time*, *Move To Over Time* and *Rotate Over Time* animate over
+  a number of seconds, with optional ease in/out. Their *then* output continues immediately;
+  *finished* runs when the motion ends. Chain the *finished* outputs for sequences, such as a hop
+  up and then back down.
 * **Data wires** (coloured by type: green number, yellow vector, red bool, pink text, blue
   entity) feed values. They come from math, logic, vector, input, time and entity nodes. An
   unconnected input uses the value typed into the node. Entity inputs default to **Self**.

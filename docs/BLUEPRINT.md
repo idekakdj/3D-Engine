@@ -1383,6 +1383,8 @@ Probe -> captured every frame), player check and vertical slice validation-clean
 the same as on llvmpipe (mirrored walls and blocks on the floor, the room in the chrome ball vs. a
 black floor without the probe). In the editor the showcase's metal balls reflect the scene, the
 Reflection probes switch and the Reflections view behave as intended, and the probe outline shows.
+GPU time in the editor (Debug + validation): 6-8 ms with probes off, 7-9 ms on (about +1 ms for
+one real-time capture per frame).
 
 **Not done yet:** screen-space reflections
 for contact detail; captures that include specular (second bounce); rotated boxes and sphere
@@ -1408,11 +1410,14 @@ probes; saving captures with the scene for static lighting.
    string, entity and any. `connect()` enforces the rules: types compatible, one wire per data
    input, one wire per exec output (exec inputs merge), no self links. An unconnected entity
    input is **Self**.
-3. **Node library** (58 nodes).
+3. **Node library** (61 nodes).
    * Events: On Start / On Update / On Key Pressed / On Key Released / On Event / Every N Seconds.
    * Flow: Branch, Sequence, Delay.
    * Actions: Print, Set (World) Position, Move By, Rotate, Set Scale, Set Visible, Look At, Spawn,
      Destroy, Emit Event, Set Variable.
+   * Smooth motion (added after the owner's first test, where Move By + Delay hops looked choppy):
+     Move By / Move To / Rotate Over Time. Each is a per-update timer with a smoothstep ease. Its
+     `then` output continues immediately and `finished` runs at the end.
    * Data: Get Variable, Self, Find Entity, positions and forward, Delta Time, Time, Is Key Down,
      Key Axis, number maths, comparisons and logic, vector make / break / add / subtract / scale /
    length / normalize / distance, and Join Text.
@@ -1468,4 +1473,18 @@ Also:
 * Component nodes (lights, physics impulses, audio).
 * Comments and reroute nodes, copy / paste between graphs, and live debugging (highlighting the
   wires that executed).
+
+**Owner feedback, round 1 (Intel Arc, 2026-09-29).** Hopping, the console print and editing a
+variable all worked. Fixes:
+* The demo hop is now eased (Move By Over Time up 0.25 s, then down 0.3 s).
+* Dear ImGui's ID-conflict error in the Script inspector: the header and the path field were both
+  labelled "Script"; the field is now "Path".
+* The editor UI did not scale in fullscreen. View > UI Scale (Auto = window height / 900, in
+  5 % steps; or 100-200 %) rebuilds the style from the unscaled one (`ScaleAllSizes`, and
+  `FontScaleMain` for the font). The choice is persisted in `<cache_dir>/editor_prefs.json`.
+* The viewport grid (ImGuizmo `DrawGrid`, a 2D overlay without depth) was drawn across solid
+  objects, a likely source of the reported shimmer. It is now renderer debug lines:
+  depth-tested, centred on the camera, split into segments whose alpha fades with distance,
+  with a red X axis and a blue Z axis. `debug_line.frag` now uses a relative depth bias (0.2 % of
+  the distance), so lines lying on a surface pass against the jittered scene depth.
 

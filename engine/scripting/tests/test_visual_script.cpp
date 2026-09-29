@@ -292,3 +292,46 @@ TEST_CASE("visual script: input, sequence, delay, timers, spawn and hot reload")
     CHECK(vm.reload_changed() == 1);
     vm.set_input(nullptr);
 }
+
+TEST_CASE("visual script: smooth motion nodes interpolate and then run 'finished'") {
+    ScriptFixture f;
+    VisualGraph   g;
+    g.variables.push_back(GraphVariable{ "done", PinType::Number, 0.0 });
+    const u32 start = g.add_node("event.start");
+    const u32 move = g.add_node("action.move_over_time");
+    g.find(move)->values["offset"] = Vec3(0.0f, 2.0f, 0.0f);
+    g.find(move)->values["seconds"] = 1.0;
+    g.find(move)->values["ease"] = false; // linear, to check the halfway point
+    g.connect(start, "then", move, "in");
+    const u32 spin = g.add_node("action.rotate_over_time");
+    g.find(spin)->values["degrees"] = 90.0;
+    g.find(spin)->values["seconds"] = 0.5;
+    g.connect(move, "then", spin, "in"); // 'then' continues immediately: both run together
+    const u32 set = g.add_node("action.set_variable");
+    g.find(set)->variable = "done";
+    g.find(set)->values["value"] = 1.0;
+    g.connect(move, "finished", set, "in");
+    const GraphCompileResult c = compile_graph_to_lua(g);
+    INFO(c.lua);
+    REQUIRE(c.ok());
+    f.write("tween.aegraph", graph_to_json(g));
+
+    ScriptVM&    vm = f.start();
+    const Entity e = f.spawn("tween.aegraph");
+    vm.update(0.0f); // on_start: timers created at t0
+    for (int i = 0; i < 5; ++i) {
+        vm.update(0.1f);
+    }
+    const Transform& t = f.world.get<TransformComponent>(e).local;
+    CHECK(t.position.y == doctest::Approx(1.0f).epsilon(0.02)); // halfway, linear
+    CHECK(std::get<f64>(*vm.get_field(e, "done")) == 0.0);
+    for (int i = 0; i < 8; ++i) {
+        vm.update(0.1f);
+    }
+    CHECK(f.world.get<TransformComponent>(e).local.position.y == doctest::Approx(2.0f));
+    CHECK(std::get<f64>(*vm.get_field(e, "done")) == 1.0); // 'finished' ran once
+    // 90 degrees around +Y in total.
+    const Vec3 fwd = f.world.get<TransformComponent>(e).local.rotation * Vec3(0.0f, 0.0f, -1.0f);
+    CHECK(fwd.x == doctest::Approx(-1.0f).epsilon(0.01));
+    CHECK(vm.error_count() == 0);
+}

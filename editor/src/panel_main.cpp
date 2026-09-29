@@ -187,6 +187,17 @@ void EditorApp::draw_menu_bar() {
         ImGui::MenuItem("Assets", nullptr, &show_assets_);
         ImGui::MenuItem("Material", nullptr, &show_material_);
         ImGui::MenuItem("Visual Script", nullptr, &show_graph_, graph_editor_ != nullptr && graph_editor_->is_open());
+        if (ImGui::BeginMenu("UI Scale")) {
+            struct Choice { const char* label; f32 value; };
+            for (const Choice c : { Choice{ "Auto (follows window size)", 0.0f }, Choice{ "100%", 1.0f }, Choice{ "125%", 1.25f },
+                                    Choice{ "150%", 1.5f }, Choice{ "175%", 1.75f }, Choice{ "200%", 2.0f } }) {
+                if (ImGui::MenuItem(c.label, nullptr, std::abs(ui_scale_setting_ - c.value) < 0.001f)) {
+                    ui_scale_setting_ = c.value;
+                    save_editor_prefs();
+                }
+            }
+            ImGui::EndMenu();
+        }
         ImGui::MenuItem("Animation", nullptr, &show_animation_);
         ImGui::MenuItem("Console", nullptr, &show_console_);
         ImGui::MenuItem("Engine stats", nullptr, &show_stats_);

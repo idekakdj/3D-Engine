@@ -88,6 +88,19 @@ std::vector<NodeDef> build_library() {
         { exec("in"), ent("target"), vec("offset", Vec3(0.0f, 1.0f, 0.0f)) }, { exec("then") });
     add("action.rotate", "Rotate", "Actions", "Rotates around an axis (degrees) in the local frame.",
         { exec("in"), ent("target"), vec("axis", Vec3(0.0f, 1.0f, 0.0f)), num("degrees", 90.0) }, { exec("then") });
+    add("action.move_over_time", "Move By Over Time", "Actions",
+        "Smoothly moves by an offset over some seconds; 'finished' runs at the end ('then' continues at once).",
+        { exec("in"), ent("target"), vec("offset", Vec3(0.0f, 1.0f, 0.0f)), num("seconds", 0.5), boolean("ease", true) },
+        { exec("then"), exec("finished") });
+    add("action.move_to_over_time", "Move To Over Time", "Actions",
+        "Smoothly moves to a local position over some seconds; 'finished' runs at the end.",
+        { exec("in"), ent("target"), vec("position"), num("seconds", 0.5), boolean("ease", true) },
+        { exec("then"), exec("finished") });
+    add("action.rotate_over_time", "Rotate Over Time", "Actions",
+        "Smoothly rotates around an axis (degrees) over some seconds; 'finished' runs at the end.",
+        { exec("in"), ent("target"), vec("axis", Vec3(0.0f, 1.0f, 0.0f)), num("degrees", 90.0), num("seconds", 1.0),
+          boolean("ease", true) },
+        { exec("then"), exec("finished") });
     add("action.set_scale", "Set Scale", "Actions", "Sets the local scale.",
         { exec("in"), ent("target"), vec("scale", Vec3(1.0f)) }, { exec("then") });
     add("action.set_visible", "Set Visible", "Actions", "Shows or hides the entity and its children.",
@@ -733,7 +746,33 @@ public:
             out += ind + "end)\n";
             return;
         }
-        if (t == "action.print") {
+        if (t == "action.move_over_time" || t == "action.move_to_over_time" || t == "action.rotate_over_time") {
+            // A per-update timer interpolates with smoothstep easing; 'finished' runs inside it at k = 1.
+            const std::string i2 = ind + "    ";
+            const std::string i3 = i2 + "    ";
+            const std::string i4 = i3 + "    ";
+            out += std::format("{}do local t = {} if t and t:valid() then\n", ind, in("target"));
+            out += std::format("{}local dur, ease, t0 = math.max({}, 0.001), {}, time.time\n", i2, in("seconds"), in("ease"));
+            if (t == "action.rotate_over_time") {
+                out += std::format("{}local axis, total, done = ({}):normalized(), {}, 0.0\n", i2, in("axis"), in("degrees"));
+            } else if (t == "action.move_over_time") {
+                out += std::format("{}local from = t:position()\n{}local delta = {}\n", i2, i2, in("offset"));
+            } else {
+                out += std::format("{}local from = t:position()\n{}local delta = {} - from\n", i2, i2, in("position"));
+            }
+            out += std::format("{}timer.every(0.0001, function(h)\n", i2);
+            out += std::format("{}local k = math.min((time.time - t0) / dur, 1.0)\n", i3);
+            out += std::format("{}local s = ease and k * k * (3.0 - 2.0 * k) or k\n", i3);
+            if (t == "action.rotate_over_time") {
+                out += std::format("{}if t:valid() then t:rotate(Quat.angle_axis(math.rad(total * s - done), axis)) end\n", i3);
+                out += std::format("{}done = total * s\n", i3);
+            } else {
+                out += std::format("{}if t:valid() then t:set_position(from + delta * s) end\n", i3);
+            }
+            out += std::format("{}if k >= 1.0 then\n{}h:cancel()\n", i3, i4);
+            then("finished", i4);
+            out += std::format("{}end\n{}end)\n{}end end\n", i3, i2, ind);
+        } else if (t == "action.print") {
             out += std::format("{}log.info(tostring({}))\n", ind, in("value"));
         } else if (t == "action.set_position") {
             entity_call(out, n, ind, std::format("set_position({})", in("position")));

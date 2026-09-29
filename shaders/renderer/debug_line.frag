@@ -22,7 +22,9 @@ layout(location = 0) out vec4 out_color;
 void main() {
     if (pc.depth_tex != AE_INVALID_INDEX) {
         float scene = textureLod(AE_TEX2D(pc.depth_tex), gl_FragCoord.xy * pc.inv_target_size, 0.0).r;
-        if (gl_FragCoord.z + pc.depth_bias < scene) {
+        // Relative bias (reverse-Z depth ~ 1 / distance): lines lying ON a surface (the editor grid on
+        // a floor at y = 0) pass at any distance, also against the TAA-jittered scene depth.
+        if (gl_FragCoord.z * (1.0 + pc.depth_bias) < scene) {
             discard;
         }
     }

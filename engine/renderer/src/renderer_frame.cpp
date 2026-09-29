@@ -2462,7 +2462,7 @@ void RendererImpl::build_graph(const RenderScene& scene, const RenderTarget& tar
                     p.depth_tex = ctx.sampled(depth);
                     p.decode_srgb = decode ? 1u : 0u;
                     p.inv_target_size = Vec2(1.0f) / Vec2(out_size);
-                    p.depth_bias = 1e-5f;
+                    p.depth_bias = 2e-3f; // relative: 0.2 % of the distance (debug_line.frag)
                     ctx.cmd.push_constants(rhi::ShaderStage::AllGraphics, 0, sizeof(p), &p);
                     ctx.cmd.draw(count);
                     ++stats_.draw_calls;

@@ -113,12 +113,9 @@ void EditorApp::draw_viewport_gizmo(const Vec2& origin, bool game_view, bool& gi
     // ImGuizmo expects an OpenGL-style (Y-up NDC) projection.
     const Mat4 proj = glm::perspectiveRH_NO(fov_y_deg_ * kDeg2Rad, viewport_size_.x / viewport_size_.y, 0.1f, 2000.0f);
 
-    if (snap_.show_grid) {
-        const f32  spacing = std::max(snap_.grid_spacing, 0.01f);
-        const Mat4 grid    = glm::scale(Mat4(1.0f), Vec3(spacing));
-        ImGuizmo::DrawGrid(glm::value_ptr(view), glm::value_ptr(proj), glm::value_ptr(grid),
-                           static_cast<f32>(std::max(snap_.grid_extent, 1)));
-    }
+    // The grid is drawn by the renderer as depth-tested lines (on_render_frame), so objects hide it;
+    // an ImGui overlay would draw it on top of everything.
+    grid_this_frame_ = snap_.show_grid;
 
     const std::vector<Entity> roots = selection_roots(world(), selection());
     if (roots.empty()) {

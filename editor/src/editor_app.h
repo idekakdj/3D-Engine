@@ -43,6 +43,8 @@ namespace aether::gameplay {
 class RenderResourceCache;
 }
 
+struct ImGuiStyle;
+
 namespace aether::editor {
 
 class ThumbnailCache;
@@ -295,6 +297,15 @@ private:
     std::filesystem::path assets_dir_; // content-relative directory being browsed
     std::unique_ptr<ThumbnailCache> thumbnails_;
     std::unique_ptr<GraphEditor>    graph_editor_; // ADR-0018
+    // UI scale (View > UI Scale): 0 = auto (follows the window height), else a fixed factor.
+    // Persisted in <cache_dir>/editor_prefs.json. The style is rebuilt from base_style_ on change.
+    bool                            grid_this_frame_ = false; // set by the viewport, drawn in on_render_frame
+    f32                             ui_scale_setting_ = 0.0f;
+    f32                             ui_scale_applied_ = 0.0f;
+    std::unique_ptr<ImGuiStyle>     base_style_;
+    void                            apply_ui_scale();
+    void                            save_editor_prefs() const;
+    void                            load_editor_prefs();
     bool                            show_graph_ = false;
     // projects window (ADR-0014)
     runtime::RecentProjects              recent_{ runtime::RecentProjects::default_file() };

@@ -539,7 +539,7 @@ void EditorApp::draw_inspector() {
     if (auto* sc = w.try_get<scripting::ScriptComponent>(e); sc != nullptr && !multi) {
         bool remove = false;
         if (component_header("Script", &remove)) {
-            bool changed = with("Script path").drag(input_text("Script", sc->script));
+            bool changed = with("Script path").drag(input_text("Path##script", sc->script));
             // ADR-0018: visual scripts.
             if (sc->script.ends_with(".aegraph")) {
                 if (ImGui::Button("Edit Graph")) {
