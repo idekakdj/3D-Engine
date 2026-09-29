@@ -9,6 +9,7 @@
 #include <cctype>
 #include <cmath>
 #include <cstring>
+#include <iterator>
 #include <format>
 
 namespace aether::editor {
@@ -703,7 +704,7 @@ void GraphEditor::draw_canvas() {
     }
     if (graph_.nodes.empty()) {
         dl->AddText(iv(origin + Vec2(16.0f)), IM_COL32(150, 150, 160, 255),
-                    "Right-click to add nodes. Start from an event (On Start / On Update), then wire actions.");
+                    "Right-click to add nodes; drag empty space to move around. Start from an event (On Start / On Update), then wire actions.");
     }
 
     ImGui::PushFont(nullptr, ImGui::GetStyle().FontSizeBase * zoom_);
@@ -777,6 +778,17 @@ void GraphEditor::draw_canvas() {
             redo_.clear();
         } else {
             selection_.clear();
+            panning_left_ = true; // dragging empty canvas scrolls the view (a click just deselects)
+        }
+    }
+    if (panning_left_) {
+        if (ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+            scroll_ += vv(io.MouseDelta) / zoom_;
+            if (io.MouseDelta.x != 0.0f || io.MouseDelta.y != 0.0f) {
+                ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeAll);
+            }
+        } else {
+            panning_left_ = false;
         }
     }
     if (moving_) {
@@ -824,7 +836,18 @@ void GraphEditor::draw_canvas() {
     }
     if (hovered && io.MouseWheel != 0.0f && !widget) {
         const Vec2 before = to_canvas(mouse, origin);
-        zoom_ = std::clamp(zoom_ * std::pow(1.1f, io.MouseWheel), 0.4f, 1.6f);
+        // Fixed zoom steps: each distinct text size bakes new glyphs into the UI font atlas, so a
+        // handful of sizes keeps the atlas stable (continuous zoom rebuilt it on every wheel step).
+        static constexpr f32 kZoomSteps[] = { 0.5f, 0.625f, 0.75f, 0.875f, 1.0f, 1.125f, 1.25f, 1.5f };
+        constexpr int        kCount = static_cast<int>(std::size(kZoomSteps));
+        int                  cur = 0;
+        for (int k = 0; k < kCount; ++k) {
+            if (std::abs(kZoomSteps[k] - zoom_) < std::abs(kZoomSteps[cur] - zoom_)) {
+                cur = k;
+            }
+        }
+        cur = std::clamp(cur + (io.MouseWheel > 0.0f ? 1 : -1), 0, kCount - 1);
+        zoom_ = kZoomSteps[cur];
         scroll_ += to_canvas(mouse, origin) - before; // keep the point under the cursor
     }
     draw_create_menu();

@@ -139,6 +139,15 @@ void imgui_render(CommandList& cmd) {
     auto& list = static_cast<vk::VulkanCommandList&>(cmd);
     AE_ASSERT_MSG(list.in_rendering(), "imgui_render must be called inside begin_rendering()");
     ImGui::Render();
+    // Diagnostics: font atlas (re)creations upload with a queue wait-idle mid-frame; logged so they
+    // can be correlated with visual hitches.
+    if (const ImDrawData* dd = ImGui::GetDrawData(); dd != nullptr && dd->Textures != nullptr) {
+        for (const ImTextureData* t : *dd->Textures) {
+            if (t->Status == ImTextureStatus_WantCreate) {
+                AE_LOG_INFO("ImGui", "UI texture #{} created ({}x{})", t->UniqueID, t->Width, t->Height);
+            }
+        }
+    }
     ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), list.vk());
     list.invalidate_bindings(); // ImGui bound its own pipeline layout / descriptor set
 }

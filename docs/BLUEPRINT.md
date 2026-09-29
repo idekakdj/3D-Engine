@@ -1517,3 +1517,16 @@ variable all worked. Fixes:
 * The inspector's **New Visual Script** button is shown disabled while playing ("stop playing
   first"), instead of disappearing.
 
+**Owner feedback, round 4 (Intel Arc, 2026-09-29).**
+* After the viewport-race fix the flicker is much rarer, but it still shows now and then with a
+  graph open. Mitigations and diagnostics:
+  * The node canvas zooms in fixed steps (0.5-1.5). Each distinct text size bakes glyphs into Dear
+    ImGui's dynamic font atlas, and a rebuild uploads with a queue wait-idle mid-frame; continuous
+    zoom caused a rebuild on every wheel step.
+  * Every UI texture (re)creation is logged ("UI texture #N created"), so it can be correlated
+    with any remaining hitches.
+  * The ImGui Vulkan backend's texture destruction was checked: it waits for the swapchain image
+    count, which is at least the engine's frames in flight.
+* Visual Script canvas: dragging empty space with the left button pans the view (a plain click
+  still clears the selection); right / middle drag still pan too.
+

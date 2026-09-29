@@ -1,6 +1,7 @@
 // graph_editor.h — PRIVATE: the visual script (node graph) editor window (ADR-0018).
 //
-// Edits one .aegraph file at a time: a pannable / zoomable canvas (right-drag pans, wheel zooms,
+// Edits one .aegraph file at a time: a pannable / zoomable canvas (dragging empty space or
+// right-dragging pans, the wheel zooms in fixed steps,
 // right-click or dropping a wire on empty space opens the node menu), drag-to-wire between pins
 // (type-checked; grabbing a connected data input picks its wire up, Alt+click clears a pin),
 // inline literals for unconnected inputs, a variables list (the script's properties), a node
@@ -82,7 +83,8 @@ private:
     // Interaction state.
     PinRef                          drag_;            // wire being dragged
     bool                            moving_ = false;  // dragging selected nodes
-    bool                            panning_ = false;
+    bool                            panning_ = false;      // right / middle drag
+    bool                            panning_left_ = false; // left drag on empty canvas
     Vec2                            menu_canvas_pos_{ 0.0f };
     PinRef                          menu_connect_;    // wire dropped on empty space -> auto-connect
     bool                            open_menu_ = false;

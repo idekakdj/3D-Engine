@@ -162,7 +162,7 @@ error isolation and hot reload.
     to nodes that fit the wire.
   * Drag between pins to connect them. Dragging a connected input picks up its wire, and
     Alt+click clears a pin.
-  * Right-drag pans the canvas and the mouse wheel zooms.
+  * Drag empty canvas space (or right-drag) to pan, and use the mouse wheel to zoom.
   * Del deletes, Ctrl+D duplicates, Ctrl+Z / Ctrl+Y undo and redo, and Ctrl+S saves.
 * **Errors:** nodes with errors are outlined red, with a clickable list below the canvas. A
   graph with errors does not replace the running version.
