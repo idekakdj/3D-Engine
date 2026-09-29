@@ -1324,7 +1324,7 @@ rotated volumes; GI for translucent capture; baking a volume to disk for static 
 
 ## ADR-0017 — Reflections: box-projected reflection capture probes (2026-09-28)
 
-**Status:** accepted; verified on Linux (llvmpipe). Third of the owner's "Unreal-style" features.
+**Status:** accepted; verified on Linux (llvmpipe) and on Windows (Intel Arc). Third of the owner's "Unreal-style" features.
 
 **Context.** Specular reflections came only from the sky (IBL prefiltered cube) or the flat ambient:
 a polished floor indoors mirrored the sky, and metals looked wrong in any enclosed space. Screen-space
@@ -1379,7 +1379,12 @@ ball: the floor mirrors the red / green walls and the blocks, parallax-correct) 
 skipped on llvmpipe; every earlier golden unchanged); editor self-test (+ Create > Reflection
 Probe -> captured every frame), player check and vertical slice validation-clean.
 
-**Not done yet:** Arc references for `reflections` / `reflections_off`; screen-space reflections
+**Verified on Windows (owner's Intel Arc PC, 2026-09-29).** `reflections` / `reflections_off` render
+the same as on llvmpipe (mirrored walls and blocks on the floor, the room in the chrome ball vs. a
+black floor without the probe). In the editor the showcase's metal balls reflect the scene, the
+Reflection probes switch and the Reflections view behave as intended, and the probe outline shows.
+
+**Not done yet:** screen-space reflections
 for contact detail; captures that include specular (second bounce); rotated boxes and sphere
 probes; saving captures with the scene for static lighting.
 
