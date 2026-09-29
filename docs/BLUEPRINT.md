@@ -1488,3 +1488,19 @@ variable all worked. Fixes:
   with a red X axis and a blue Z axis. `debug_line.frag` now uses a relative depth bias (0.2 % of
   the distance), so lines lying on a surface pass against the jittered scene depth.
 
+**Owner feedback, round 2 (Intel Arc, 2026-09-29).**
+* **Flicker.** The whole editor window flickered: at random, when hovering the "real-time"
+  checkbox (its tooltip crosses the window edge), and with the Visual Script window open. Stray
+  "Material" / "Animation" taskbar entries pointed at the cause: Dear ImGui multi-viewports. Any
+  panel, popup or tooltip leaving the main window became an OS window with its own swapchain, and
+  creating / destroying those windows made the main window flicker. Multi-viewports are now opt-in
+  (`AETHER_IMGUI_VIEWPORTS=1`, and then without taskbar icons); panels stay docked inside the
+  editor.
+* **Hops.** Repeated hops drifted upwards and stayed mid-air: overlapping Move By Over Time tweens
+  each interpolated from their own start position. Move By Over Time is now additive (each tick
+  applies only its share of the offset), so overlapping moves stack and matching opposite moves
+  always land back (test: three overlapping hops return exactly to y = 0). Move To Over Time stays
+  absolute.
+* Confirmed: fullscreen UI scaling, the depth-tested grid, and a user-made graph (key C hides an
+  entity).
+

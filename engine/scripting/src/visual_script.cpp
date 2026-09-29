@@ -756,7 +756,9 @@ public:
             if (t == "action.rotate_over_time") {
                 out += std::format("{}local axis, total, done = ({}):normalized(), {}, 0.0\n", i2, in("axis"), in("degrees"));
             } else if (t == "action.move_over_time") {
-                out += std::format("{}local from = t:position()\n{}local delta = {}\n", i2, i2, in("offset"));
+                // Additive: each tick applies only its share of the offset, so overlapping moves (a
+                // hop pressed again mid-air) add up and a matching opposite move always lands back.
+                out += std::format("{}local delta, done = {}, 0.0\n", i2, in("offset"));
             } else {
                 out += std::format("{}local from = t:position()\n{}local delta = {} - from\n", i2, i2, in("position"));
             }
@@ -766,6 +768,9 @@ public:
             if (t == "action.rotate_over_time") {
                 out += std::format("{}if t:valid() then t:rotate(Quat.angle_axis(math.rad(total * s - done), axis)) end\n", i3);
                 out += std::format("{}done = total * s\n", i3);
+            } else if (t == "action.move_over_time") {
+                out += std::format("{}if t:valid() then t:set_position(t:position() + delta * (s - done)) end\n", i3);
+                out += std::format("{}done = s\n", i3);
             } else {
                 out += std::format("{}if t:valid() then t:set_position(from + delta * s) end\n", i3);
             }

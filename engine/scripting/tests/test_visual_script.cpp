@@ -335,3 +335,40 @@ TEST_CASE("visual script: smooth motion nodes interpolate and then run 'finished
     CHECK(fwd.x == doctest::Approx(-1.0f).epsilon(0.01));
     CHECK(vm.error_count() == 0);
 }
+
+TEST_CASE("visual script: overlapping Move By Over Time hops always land back (additive moves)") {
+    ScriptFixture f;
+    VisualGraph   g;
+    const u32     key = g.add_node("event.key_pressed");
+    const u32     up = g.add_node("action.move_over_time");
+    g.find(up)->values["offset"] = Vec3(0.0f, 1.0f, 0.0f);
+    g.find(up)->values["seconds"] = 0.3;
+    const u32 down = g.add_node("action.move_over_time");
+    g.find(down)->values["offset"] = Vec3(0.0f, -1.0f, 0.0f);
+    g.find(down)->values["seconds"] = 0.3;
+    g.connect(key, "then", up, "in");
+    g.connect(up, "finished", down, "in");
+    REQUIRE(compile_graph_to_lua(g).ok());
+    f.write("hop.aegraph", graph_to_json(g));
+
+    ScriptVM&    vm = f.start();
+    const Entity e = f.spawn("hop.aegraph");
+    InputState   in{};
+    vm.set_input(&in);
+    vm.update(0.05f);
+    for (int press = 0; press < 3; ++press) { // three hops 0.1 s apart: they overlap mid-air
+        in.keys[static_cast<usize>(Key::Space)] = ButtonState::Pressed;
+        vm.update(0.05f);
+        in.keys[static_cast<usize>(Key::Space)] = ButtonState::Released;
+        vm.update(0.05f);
+    }
+    f32 highest = 0.0f;
+    for (int i = 0; i < 40; ++i) {
+        vm.update(0.05f);
+        highest = std::max(highest, f.world.get<TransformComponent>(e).local.position.y);
+    }
+    CHECK(highest > 1.0f); // the overlapping hops stacked up
+    CHECK(f.world.get<TransformComponent>(e).local.position.y == doctest::Approx(0.0f).epsilon(1e-4));
+    CHECK(vm.error_count() == 0);
+    vm.set_input(nullptr);
+}

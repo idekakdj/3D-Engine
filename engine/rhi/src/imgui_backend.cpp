@@ -17,6 +17,8 @@
 #include <imgui_impl_vulkan.h>
 #include <imgui_internal.h>
 
+#include <cstdlib>
+
 #include <string>
 #include <unordered_set>
 
@@ -47,7 +49,14 @@ void imgui_init(Device& device, Window& window) {
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
     ImGuiIO& io = ImGui::GetIO();
-    io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard | ImGuiConfigFlags_DockingEnable | ImGuiConfigFlags_ViewportsEnable;
+    io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard | ImGuiConfigFlags_DockingEnable;
+    // Multi-viewport (panels / popups / tooltips outside the main window become OS windows with their
+    // own swapchains) is opt-in: creating and destroying those windows made the whole editor flicker
+    // on Windows (e.g. a tooltip crossing the window edge) and left stray taskbar entries.
+    if (const char* v = std::getenv("AETHER_IMGUI_VIEWPORTS"); v != nullptr && v[0] == '1') {
+        io.ConfigFlags |= ImGuiConfigFlags_ViewportsEnable;
+        io.ConfigViewportsNoTaskBarIcon = true;
+    }
     // Never CWD-relative: layout persistence lives in the per-user cache.
     g_bridge.ini_path = paths::to_utf8(paths::cache_dir() / "imgui.ini");
     io.IniFilename    = g_bridge.ini_path.c_str();
@@ -95,7 +104,8 @@ void imgui_init(Device& device, Window& window) {
             ImGui::RenderPlatformWindowsDefault();
         }
     });
-    AE_LOG_INFO("ImGui", "Dear ImGui {} initialized (docking + viewports, dynamic rendering)", ImGui::GetVersion());
+    AE_LOG_INFO("ImGui", "Dear ImGui {} initialized (docking{}, dynamic rendering)", ImGui::GetVersion(),
+                (io.ConfigFlags & ImGuiConfigFlags_ViewportsEnable) ? " + viewports" : "");
 }
 
 void imgui_shutdown(Device& device) {
